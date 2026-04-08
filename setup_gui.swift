@@ -47,74 +47,6 @@ enum ProviderOption: String, CaseIterable, Identifiable {
     }
 }
 
-extension Notification.Name {
-    static let managedQuitAttempted = Notification.Name("ManagedQuitAttempted")
-}
-
-@MainActor
-final class ManagedAppRuntime {
-    static let shared = ManagedAppRuntime()
-
-    let windowDelegate = ManagedWindowDelegate()
-    var allowTermination = false
-    var requiresManagedShutdown = false
-    private(set) var launchedInBackground = ProcessInfo.processInfo.arguments.contains("--background")
-
-    private init() {}
-
-    func installWindowDelegate(on window: NSWindow) {
-        guard window.delegate !== windowDelegate else {
-            return
-        }
-        window.delegate = windowDelegate
-        window.isReleasedWhenClosed = false
-    }
-
-    func hideToBackground() {
-        for window in NSApp.windows {
-            window.orderOut(nil)
-        }
-        NSApp.hide(nil)
-    }
-
-    func reopenMainWindow() {
-        for window in NSApp.windows {
-            window.makeKeyAndOrderFront(nil)
-        }
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func blockExternalQuitAndReveal() {
-        NotificationCenter.default.post(name: .managedQuitAttempted, object: nil)
-        reopenMainWindow()
-    }
-
-    func completeManagedShutdown() {
-        allowTermination = true
-        requiresManagedShutdown = false
-        NSApp.terminate(nil)
-    }
-
-    func consumeBackgroundLaunchFlag() -> Bool {
-        let value = launchedInBackground
-        launchedInBackground = false
-        return value
-    }
-}
-
-@MainActor
-final class ManagedWindowDelegate: NSObject, NSWindowDelegate {
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if !ManagedAppRuntime.shared.requiresManagedShutdown {
-            NSApp.terminate(nil)
-            return false
-        }
-        sender.orderOut(nil)
-        NSApp.hide(nil)
-        return false
-    }
-}
-
 @MainActor
 final class SetupViewModel: ObservableObject {
     let appSupportDir = URL(fileURLWithPath: "/Library/Application Support/CSUStudentWiFi", isDirectory: true)
@@ -143,10 +75,6 @@ final class SetupViewModel: ObservableObject {
     private var pageStatusOverrideText: String?
     private var pageStatusOverrideTone: StatusTone?
     private var pageStatusOverrideExpiry = Date.distantPast
-    private var backgroundProcess: Process?
-    private var backgroundRestartWorkItem: DispatchWorkItem?
-    private var managedQuitObserver: NSObjectProtocol?
-    private var suppressNextBackgroundRestart = false
 
     var configURL: URL {
         userSupportDir.appendingPathComponent("config.toml")
@@ -172,28 +100,6 @@ final class SetupViewModel: ObservableObject {
         appSupportDir.appendingPathComponent("bin/csu-auto-relogin")
     }
 
-    init() {
-        managedQuitObserver = NotificationCenter.default.addObserver(
-            forName: .managedQuitAttempted,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.setTransientPageStatus(
-                    "后台仍在运行。想彻底停止，请打开窗口后点“关闭后台运行”。",
-                    tone: .warn,
-                    holdFor: 10
-                )
-            }
-        }
-    }
-
-    deinit {
-        if let managedQuitObserver {
-            NotificationCenter.default.removeObserver(managedQuitObserver)
-        }
-    }
-
     var canEnableAutostart: Bool {
         isConfigReady && autoRunText != "已经开启" && !isTesting
     }
@@ -212,13 +118,13 @@ final class SetupViewModel: ObservableObject {
         refreshRuntimeState()
     }
 
-    func refreshRuntimeState(forceRestartRunner: Bool = false) {
+    func refreshRuntimeState() {
         configPathText = configURL.path
         statePathText = stateURL.path
         logPathText = logURL.path
         configStateText = isConfigReady ? "已经可用" : "还没填完整"
         autoRunText = isLaunchAgentLoaded() ? "已经开启" : "还没开启"
-        syncBackgroundRunner(forceRestart: forceRestartRunner)
+        backgroundStateText = autoRunText == "已经开启" ? "后台自启已开启" : "后台自启未开启"
         lastTestText = describeLastTest()
         applyPageStatus()
         if !isTesting {
@@ -236,10 +142,10 @@ final class SetupViewModel: ObservableObject {
             try rendered.write(to: configURL, atomically: true, encoding: .utf8)
             chmod(configURL.path, 0o600)
             setTransientPageStatus(
-                "配置已保存。下一步点“开启开机自启”后，这个软件会在开机后自动进入后台运行。",
+                "配置已保存。需要的话再点“开启后台自启”即可。",
                 tone: .good
             )
-            refreshRuntimeState(forceRestartRunner: true)
+            refreshRuntimeState()
         } catch {
             setTransientPageStatus("保存失败：\(error.localizedDescription)", tone: .bad, holdFor: 12)
         }
@@ -249,8 +155,7 @@ final class SetupViewModel: ObservableObject {
         runAuxiliaryCommand(
             executable: setupScriptURL,
             arguments: ["--load-if-ready"],
-            successPrefix: "开机自启和后台运行已开启",
-            forceRestartRunner: true
+            successPrefix: "后台自启已开启，登录后会自动在后台检查"
         )
     }
 
@@ -258,8 +163,7 @@ final class SetupViewModel: ObservableObject {
         runAuxiliaryCommand(
             executable: disableScriptURL,
             arguments: [],
-            successPrefix: "后台运行已关闭",
-            terminateAppAfterSuccess: true
+            successPrefix: "后台自启已关闭"
         )
     }
 
@@ -429,7 +333,7 @@ logout_user_ipv6 = ""
 logout_vlan_id = 0
 
 [client]
-check_interval_seconds = 45
+check_interval_seconds = 18000
 force_relogin_hours = \(safeForce)
 relogin_cooldown_seconds = \(safeCooldown)
 max_backoff_seconds = 300
@@ -445,9 +349,7 @@ campus_ipv4_cidrs = [\(cidrText)]
     private func runAuxiliaryCommand(
         executable: URL,
         arguments: [String],
-        successPrefix: String,
-        forceRestartRunner: Bool = false,
-        terminateAppAfterSuccess: Bool = false
+        successPrefix: String
     ) {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Self.runProcess(executable: executable, arguments: arguments)
@@ -457,11 +359,6 @@ campus_ipv4_cidrs = [\(cidrText)]
                         "\(successPrefix)\n\n\(result.output.isEmpty ? "完成" : result.output)",
                         tone: .good
                     )
-                    if terminateAppAfterSuccess {
-                        self.stopBackgroundRunner()
-                        ManagedAppRuntime.shared.completeManagedShutdown()
-                        return
-                    }
                 } else {
                     self.setTransientPageStatus(
                         "\(successPrefix)失败：\(result.output.isEmpty ? "exit=\(result.exitCode)" : result.output)",
@@ -469,7 +366,7 @@ campus_ipv4_cidrs = [\(cidrText)]
                         holdFor: 12
                     )
                 }
-                self.refreshRuntimeState(forceRestartRunner: forceRestartRunner)
+                self.refreshRuntimeState()
             }
         }
     }
@@ -494,13 +391,10 @@ campus_ipv4_cidrs = [\(cidrText)]
         if isTesting {
             return "正在执行真实测试。"
         }
-        if autoRunText == "已经开启" && backgroundProcess?.isRunning == true {
-            return "后台已经常驻运行。点左上角关闭只会缩到后台，想停用请点“关闭后台运行”。"
-        }
         if autoRunText == "已经开启" {
-            return "开机自启已经打开，后台检查进程正在准备启动。"
+            return "后台自启已经开启：登录 macOS 后会自动在后台检查，之后每 5 小时巡检一次。"
         }
-        return "配置已保存后，再点“开启开机自启”即可。"
+        return "配置已保存后，再点“开启后台自启”即可。"
     }
 
     private func currentRecommendationTone() -> StatusTone {
@@ -519,117 +413,6 @@ campus_ipv4_cidrs = [\(cidrText)]
     private func currentLogChunk() -> String {
         let tail = tailText(logURL, limit: 80)
         return tail.isEmpty ? "" : "[最近日志]\n\(tail)"
-    }
-
-    private func syncBackgroundRunner(forceRestart: Bool) {
-        ManagedAppRuntime.shared.requiresManagedShutdown = (autoRunText == "已经开启")
-
-        if forceRestart {
-            stopBackgroundRunner()
-        }
-
-        if autoRunText == "已经开启" && isConfigReady {
-            startBackgroundRunnerIfNeeded()
-        } else {
-            stopBackgroundRunner()
-        }
-
-        if backgroundProcess?.isRunning == true {
-            backgroundStateText = "后台运行中"
-        } else if autoRunText == "已经开启" {
-            backgroundStateText = "后台启动中"
-        } else {
-            backgroundStateText = "后台未开启"
-        }
-    }
-
-    private func startBackgroundRunnerIfNeeded() {
-        guard backgroundProcess?.isRunning != true else {
-            return
-        }
-        guard FileManager.default.isExecutableFile(atPath: runnerURL.path) else {
-            setTransientPageStatus("后台检查组件不存在，请重新安装应用。", tone: .bad, holdFor: 12)
-            backgroundStateText = "后台缺失"
-            return
-        }
-
-        backgroundRestartWorkItem?.cancel()
-
-        let process = Process()
-        process.executableURL = runnerURL
-        process.arguments = ["--config", configURL.path, "--verbose"]
-
-        if let devNull = FileHandle(forWritingAtPath: "/dev/null") {
-            process.standardOutput = devNull
-            process.standardError = devNull
-        }
-
-        process.terminationHandler = { [weak self] terminatedProcess in
-            DispatchQueue.main.async {
-                self?.handleBackgroundRunnerTermination(exitCode: terminatedProcess.terminationStatus)
-            }
-        }
-
-        do {
-            try process.run()
-            backgroundProcess = process
-            backgroundStateText = "后台运行中"
-        } catch {
-            backgroundProcess = nil
-            backgroundStateText = "后台启动失败"
-            setTransientPageStatus("后台检查进程启动失败：\(error.localizedDescription)", tone: .bad, holdFor: 12)
-        }
-    }
-
-    private func stopBackgroundRunner() {
-        backgroundRestartWorkItem?.cancel()
-        backgroundRestartWorkItem = nil
-
-        guard let process = backgroundProcess else {
-            return
-        }
-
-        if process.isRunning {
-            suppressNextBackgroundRestart = true
-            process.terminate()
-        }
-        backgroundProcess = nil
-    }
-
-    private func handleBackgroundRunnerTermination(exitCode: Int32) {
-        backgroundProcess = nil
-
-        if suppressNextBackgroundRestart {
-            suppressNextBackgroundRestart = false
-            if autoRunText == "已经开启" {
-                backgroundStateText = "后台启动中"
-            } else {
-                backgroundStateText = "后台未开启"
-            }
-            return
-        }
-
-        let shouldRestart = autoRunText == "已经开启" && isConfigReady
-        if !shouldRestart {
-            backgroundStateText = "后台未开启"
-            return
-        }
-
-        backgroundStateText = "后台重启中"
-        let workItem = DispatchWorkItem { [weak self] in
-            self?.startBackgroundRunnerIfNeeded()
-            self?.refreshRuntimeState()
-        }
-        backgroundRestartWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: workItem)
-
-        if exitCode != 0 && exitCode != 15 {
-            setTransientPageStatus(
-                "后台检查进程意外退出（exit=\(exitCode)），正在自动拉起。",
-                tone: .warn,
-                holdFor: 10
-            )
-        }
     }
 
     private func describeLastTest() -> String {
@@ -667,7 +450,10 @@ campus_ipv4_cidrs = [\(cidrText)]
     private func isLaunchAgentLoaded() -> Bool {
         let result = Self.runProcess(
             executable: URL(fileURLWithPath: "/bin/zsh"),
-            arguments: ["-lc", "launchctl list | grep -F cn.csu.autorelogin >/dev/null 2>&1"]
+            arguments: [
+                "-lc",
+                "launchctl print gui/$(id -u)/cn.csu.autorelogin >/dev/null 2>&1"
+            ]
         )
         return result.exitCode == 0
     }
@@ -731,6 +517,31 @@ campus_ipv4_cidrs = [\(cidrText)]
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: Date())
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func parseLogDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.date(from: value)
+    }
+
+    private func parseISODate(_ value: String) -> Date? {
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = isoFormatter.date(from: value) {
+            return date
+        }
+
+        let fallback = ISO8601DateFormatter()
+        fallback.formatOptions = [.withInternetDateTime]
+        return fallback.date(from: value)
     }
 
     private func applyPageStatus() {
@@ -1302,28 +1113,6 @@ struct SettingsGroup<Content: View>: View {
     }
 }
 
-struct WindowAccessor: NSViewRepresentable {
-    let onResolve: (NSWindow) -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            if let window = view.window {
-                onResolve(window)
-            }
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            if let window = nsView.window {
-                onResolve(window)
-            }
-        }
-    }
-}
-
 extension View {
     func installerInputStyle() -> some View {
         self
@@ -1345,7 +1134,6 @@ extension View {
 struct ContentView: View {
     @StateObject private var model = SetupViewModel()
     @State private var showPassword = false
-    private let timer = Timer.publish(every: 3.0, on: .main, in: .common).autoconnect()
 
     var passwordEntryWarning: String? {
         let password = model.config.password
@@ -1373,7 +1161,7 @@ struct ContentView: View {
     }
 
     var runningBehaviorHint: String {
-        "开启后会开机自动启动。点左上角关闭只会缩到后台，想彻底停止必须重新打开软件点“关闭后台运行”。"
+        "开启后，登录 macOS 时会自动在后台检查一次，之后每 5 小时巡检，不会弹出 App 窗口。"
     }
 
     var body: some View {
@@ -1390,21 +1178,8 @@ struct ContentView: View {
         .frame(minWidth: 980, minHeight: 760)
         .onAppear {
             model.loadInitialState()
-            if ManagedAppRuntime.shared.consumeBackgroundLaunchFlag() {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    ManagedAppRuntime.shared.hideToBackground()
-                }
-            }
-        }
-        .onReceive(timer) { _ in
-            model.refreshRuntimeState()
         }
         .animation(.easeInOut(duration: 0.22), value: model.isTesting)
-        .background(
-            WindowAccessor { window in
-                ManagedAppRuntime.shared.installWindowDelegate(on: window)
-            }
-        )
     }
 
     var backgroundArt: some View {
@@ -1539,19 +1314,19 @@ struct ContentView: View {
                         HStack(spacing: 10) {
                             HeroBadge(icon: "power", text: backgroundStatusText)
                             HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
-                            HeroBadge(icon: "checkmark.shield", text: "关闭窗口继续后台运行")
+                            HeroBadge(icon: "clock", text: "每 5 小时巡检")
                         }
                         VStack(alignment: .leading, spacing: 10) {
                             HeroBadge(icon: "power", text: backgroundStatusText)
                             HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
-                            HeroBadge(icon: "checkmark.shield", text: "关闭窗口继续后台运行")
+                            HeroBadge(icon: "clock", text: "每 5 小时巡检")
                         }
                     }
                 }
                 Spacer(minLength: 20)
-                Image(systemName: model.backgroundStateText == "后台运行中" ? "power.circle.fill" : "pause.circle.fill")
+                Image(systemName: model.autoRunText == "已经开启" ? "power.circle.fill" : "pause.circle.fill")
                     .font(.system(size: 40, weight: .semibold))
-                    .foregroundStyle(model.backgroundStateText == "后台运行中" ? Theme.mint : Theme.orange)
+                    .foregroundStyle(model.autoRunText == "已经开启" ? Theme.mint : Theme.orange)
                     .frame(width: 78, height: 78)
                     .background(Color.white.opacity(0.88))
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -1650,7 +1425,7 @@ struct ContentView: View {
         Button {
             model.enableAutostart()
         } label: {
-            Label("开启开机自启", systemImage: "play.fill")
+            Label("开启后台自启", systemImage: "play.fill")
         }
         .buttonStyle(.borderedProminent)
         .tint(Theme.blue)
@@ -1662,7 +1437,7 @@ struct ContentView: View {
         Button {
             model.disableAutostart()
         } label: {
-            Label("关闭后台运行", systemImage: "power.circle")
+            Label("关闭后台自启", systemImage: "power.circle")
         }
         .buttonStyle(.borderedProminent)
         .tint(Theme.rose)
@@ -1678,26 +1453,8 @@ struct ContentView: View {
     }
 }
 
-@MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if ManagedAppRuntime.shared.allowTermination || !ManagedAppRuntime.shared.requiresManagedShutdown {
-            return .terminateNow
-        }
-        ManagedAppRuntime.shared.blockExternalQuitAndReveal()
-        return .terminateCancel
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        ManagedAppRuntime.shared.reopenMainWindow()
-        return true
-    }
-}
-
 @main
 struct CSUAutoReloginSetupApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-
     var body: some Scene {
         WindowGroup("CSU Student Wi-Fi") {
             ContentView()
