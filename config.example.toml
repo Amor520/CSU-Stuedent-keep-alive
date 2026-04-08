@@ -1,0 +1,36 @@
+[credentials]
+username = "20211234567"
+password = "replace-with-real-password"
+account_suffix = "@cmccn"  # 例如 @cmccn/@unicomn/@telecomn 或 @zndx
+
+[network]
+portal_host = "portal.csu.edu.cn"
+portal_port = 802
+login_method = 1
+callback = "dr1004"
+ac_ip = ""
+ac_name = ""
+terminal_type = 1            # 1=PC, 0=phone，保持与门户抓包一致
+check_url = "http://connectivitycheck.gstatic.com/generate_204"
+fallback_check_url = "http://www.baidu.com"
+verify_certificate = true
+prefer_mac_unbind = true        # CSU 当前门户实测会先走 /portal/mac/unbind，再重新登录
+unbind_callback = "dr1002"
+logout_user_account = "drcom"   # 常见 ePortal 登出参数；如抓包不同请改成实际值
+logout_user_password = "123"
+logout_ac_logout = 1
+logout_register_mode = 1
+logout_user_ipv6 = ""
+logout_vlan_id = 0
+
+[client]
+check_interval_seconds = 45   # 仅 run_forever 模式使用；launchd + --once 可忽略
+force_relogin_hours = 144     # 第 6 天主动重登，避开第 7 天强制下线
+relogin_cooldown_seconds = 6  # 解绑后等待几秒再重新拉起 portal 页面并登录
+max_backoff_seconds = 300
+log_file = "auto_relogin.log"
+state_file = "auto_relogin_state.json"
+interface = ""               # 可指定 en0/wlan0；为空则自动推断
+mac_override = "000000000000"  # CSU 当前门户实测登录/解绑都使用全 0 MAC
+required_ssid = ""             # 可选；填了则作为优先信号，不填时仅按校园网 IP 段判断
+campus_ipv4_cidrs = ["100.64.0.0/10"]  # 当前 CSU 学生网实测地址段

@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.log
+config.toml
+auto_relogin_state.json
+captures/
+.capture_runtime/
+reports/
+scratch/
+dist/
+build/
+*.pkg
+*.dmg
+.DS_Store
