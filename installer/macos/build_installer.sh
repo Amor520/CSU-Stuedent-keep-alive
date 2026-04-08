@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build/macos"
 VENV_DIR="$BUILD_DIR/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-VERSION="${VERSION:-1.2.0}"
+VERSION="${VERSION:-1.3.0}"
 PKG_ID="cn.csu.autorelogin"
 APP_SUPPORT_SUBDIR="CSUStudentWiFi"
 PKGROOT="$BUILD_DIR/pkgroot"
@@ -13,17 +13,25 @@ PAYLOAD_BASE="$PKGROOT/Library/Application Support/$APP_SUPPORT_SUBDIR"
 DIST_DIR="$ROOT_DIR/dist"
 BIN_NAME="csu-auto-relogin"
 SETUP_BIN_NAME="csu-auto-relogin-setup"
+SETUP_APP_NAME="CSUStudentWiFi.app"
+SETUP_APP_EXECUTABLE="CSUStudentWiFi"
+SETUP_APP_CONTENTS="$PKGROOT/Applications/$SETUP_APP_NAME/Contents"
 PKG_NAME="CSUStudentWiFi-${VERSION}.pkg"
 
 echo "[1/6] Preparing build directories"
 rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR" "$DIST_DIR" "$PAYLOAD_BASE/bin"
+mkdir -p \
+  "$BUILD_DIR" \
+  "$DIST_DIR" \
+  "$PAYLOAD_BASE/bin" \
+  "$SETUP_APP_CONTENTS/MacOS" \
+  "$SETUP_APP_CONTENTS/Resources"
 
 echo "[2/6] Preparing build virtualenv"
 "$PYTHON_BIN" -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
-python -m pip install --upgrade pip >/dev/null
-python -m pip install -r "$ROOT_DIR/requirements.txt" pyinstaller >/dev/null
+HTTPS_PROXY= HTTP_PROXY= ALL_PROXY= NO_PROXY= python -m pip install --upgrade pip >/dev/null
+HTTPS_PROXY= HTTP_PROXY= ALL_PROXY= NO_PROXY= python -m pip install -r "$ROOT_DIR/requirements.txt" pyinstaller >/dev/null
 
 echo "[3/6] Building standalone binary"
 pyinstaller \
@@ -36,29 +44,58 @@ pyinstaller \
   --specpath "$BUILD_DIR" \
   "$ROOT_DIR/auto_relogin.py" >/dev/null
 
-echo "[3.5/6] Building setup wizard binary"
-pyinstaller \
-  --clean \
-  --noconfirm \
-  --onefile \
-  --name "$SETUP_BIN_NAME" \
-  --distpath "$BUILD_DIR/dist" \
-  --workpath "$BUILD_DIR/build-setup" \
-  --specpath "$BUILD_DIR" \
-  "$ROOT_DIR/setup_wizard.py" >/dev/null
+echo "[3.5/6] Building native setup app"
+swiftc \
+  -parse-as-library \
+  "$ROOT_DIR/setup_gui.swift" \
+  -o "$BUILD_DIR/dist/$SETUP_BIN_NAME"
 
 echo "[4/6] Preparing package payload"
 cp "$BUILD_DIR/dist/$BIN_NAME" "$PAYLOAD_BASE/bin/$BIN_NAME"
 cp "$BUILD_DIR/dist/$SETUP_BIN_NAME" "$PAYLOAD_BASE/bin/$SETUP_BIN_NAME"
+cp "$BUILD_DIR/dist/$SETUP_BIN_NAME" "$SETUP_APP_CONTENTS/MacOS/$SETUP_APP_EXECUTABLE"
 cp "$ROOT_DIR/config.example.toml" "$PAYLOAD_BASE/config.example.toml"
 cp "$ROOT_DIR/README.md" "$PAYLOAD_BASE/README.md"
 cp "$ROOT_DIR/installer/macos/support/setup_launch_agent.sh" "$PAYLOAD_BASE/setup_launch_agent.sh"
 cp "$ROOT_DIR/installer/macos/support/disable_launch_agent.sh" "$PAYLOAD_BASE/disable_launch_agent.sh"
 cp "$ROOT_DIR/installer/macos/support/open_config.sh" "$PAYLOAD_BASE/open_config.sh"
 cp "$ROOT_DIR/installer/macos/support/open_setup_wizard.sh" "$PAYLOAD_BASE/open_setup_wizard.sh"
+cat >"$SETUP_APP_CONTENTS/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleDisplayName</key>
+    <string>CSUStudentWiFi</string>
+    <key>CFBundleExecutable</key>
+    <string>${SETUP_APP_EXECUTABLE}</string>
+    <key>CFBundleIdentifier</key>
+    <string>cn.csu.autorelogin.setup</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>CSUStudentWiFi</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${VERSION}</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>
+EOF
 chmod 755 \
   "$PAYLOAD_BASE/bin/$BIN_NAME" \
   "$PAYLOAD_BASE/bin/$SETUP_BIN_NAME" \
+  "$SETUP_APP_CONTENTS/MacOS/$SETUP_APP_EXECUTABLE" \
   "$PAYLOAD_BASE/setup_launch_agent.sh" \
   "$PAYLOAD_BASE/disable_launch_agent.sh" \
   "$PAYLOAD_BASE/open_config.sh" \

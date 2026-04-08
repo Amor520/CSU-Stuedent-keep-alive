@@ -429,12 +429,13 @@ HTML_TEMPLATE = """<!doctype html>
             <label for="notes">使用说明</label>
             <textarea id="notes" readonly>推荐顺序：先保存配置，再启用自动运行，最后点“立即测试一次”。
 
+“立即测试一次”现在会直接强制执行一次真实重新登录，不再看本地时间戳。
 如果测试时你本来就在线，脚本会先解绑再重新登录，所以可能会有几秒短暂断网，这是正常现象。
 
 页面会持续刷新状态，但不会再覆盖你正在输入的内容。</textarea>
           </div>
         </div>
-        <div class="action-help">推荐顺序：先点“保存配置”，再点“启用自动运行”，最后点“立即测试一次”。如果只是想临时停用，再点“停用自动运行”。</div>
+        <div class="action-help">推荐顺序：先点“保存配置”，再点“启用自动运行”，最后点“立即测试一次”。这里的“立即测试一次”会强制重新登录，不会参考本地时间戳。</div>
         <div class="actions">
           <button id="save-button" class="primary">1. 保存配置</button>
           <button id="enable-button" class="secondary">2. 启用自动运行</button>
@@ -824,7 +825,7 @@ class TestRunner:
         return True, "已开始执行一次真实测试。"
 
     def _run(self) -> None:
-        command = [str(RUNNER_BIN), "--config", str(CONFIG_PATH), "--once", "--verbose"]
+        command = [str(RUNNER_BIN), "--config", str(CONFIG_PATH), "--once", "--force-relogin", "--verbose"]
         proc = subprocess.run(
             command,
             stdout=subprocess.PIPE,
