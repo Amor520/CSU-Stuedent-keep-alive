@@ -96,7 +96,7 @@
 
 构建完成后会在 `dist/` 下生成类似：
 ```text
-dist/CSUStudentWiFi-1.1.2.pkg
+dist/CSUStudentWiFi-1.1.3.pkg
 ```
 
 安装包会放入这些最小运行时文件：

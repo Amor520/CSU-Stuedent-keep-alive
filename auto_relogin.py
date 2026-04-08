@@ -447,6 +447,16 @@ def detect_local_ip(interface: str = "", target: str = "223.5.5.5", port: int = 
         if ip_address:
             return ip_address
 
+    # On macOS, a proxy/VPN TUN device may hijack the default route and make the
+    # UDP socket trick return a synthetic 198.18.x.x address. Prefer the Wi-Fi
+    # interface IPv4 when we can discover it.
+    if sys.platform == "darwin":
+        preferred_interface = detect_wifi_interface()
+        if preferred_interface:
+            ip_address = read_ipv4_from_ifconfig(preferred_interface)
+            if ip_address:
+                return ip_address
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect((target, port))
@@ -468,6 +478,12 @@ def detect_mac(interface: str = "") -> str:
         mac = read_mac_from_ifconfig(interface)
         if mac:
             return mac
+    if sys.platform == "darwin":
+        preferred_interface = detect_wifi_interface()
+        if preferred_interface:
+            mac = read_mac_from_ifconfig(preferred_interface)
+            if mac:
+                return mac
     mac_int = uuid.getnode()
     mac = "{:012x}".format(mac_int)
     return mac
