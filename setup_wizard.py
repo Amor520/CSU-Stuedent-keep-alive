@@ -432,7 +432,7 @@ HTML_TEMPLATE = """<!doctype html>
         </div>
       `).join("");
 
-      byId("page-status").className = `status ${data.config_ready ? "" : "warn"}`.trim();
+      byId("page-status").className = `status ${{data.config_ready ? "" : "warn"}}`.trim();
       byId("page-status").textContent =
         `配置文件：${{data.config_path}}\n` +
         `自动运行：${{data.autostart_loaded ? "已加载" : "未加载"}}\n` +
