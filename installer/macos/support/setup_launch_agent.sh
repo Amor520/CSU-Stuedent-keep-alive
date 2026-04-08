@@ -109,7 +109,7 @@ if [[ "$(id -u)" -eq 0 ]]; then
 fi
 chmod 600 "$CONFIG_PATH" "$PLIST_PATH"
 
-if [[ "$LOAD_IF_READY" -eq 1 && config_is_ready "$CONFIG_PATH" ]]; then
+if [[ "$LOAD_IF_READY" -eq 1 ]] && config_is_ready "$CONFIG_PATH"; then
   reload_launch_agent "$TARGET_USER" "$PLIST_PATH"
   echo "LaunchAgent is installed and loaded."
 else

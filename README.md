@@ -96,7 +96,7 @@
 
 构建完成后会在 `dist/` 下生成类似：
 ```text
-dist/CSUStudentWiFi-1.3.0.pkg
+dist/CSUStudentWiFi-1.3.1.pkg
 ```
 
 安装包会放入这些最小运行时文件：
@@ -132,6 +132,8 @@ open /Applications/CSUStudentWiFi.app
 - 默认只填账号 / 密码
 - 保存配置并启用自动运行
 - 立即执行一次真实测试，并在窗口里看结果
+
+如果 Launchpad 没有立刻刷新，也可以直接在 Finder 里打开 `/Applications/CSUStudentWiFi.app`，或者继续使用兼容入口脚本。
 
 ## 实现思路
 - 每次脚本启动先读取 `auto_relogin_state.json`；如果文件不存在，就把上次登录时间视为 Unix 纪元 `0`，从而在第一次运行时必定触发重登录。
