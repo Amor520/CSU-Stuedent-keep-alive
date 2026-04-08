@@ -41,76 +41,94 @@ HTML_TEMPLATE = """<!doctype html>
   <title>{title}</title>
   <style>
     :root {{
-      color-scheme: light dark;
-      --bg: #08101f;
-      --panel: rgba(14, 21, 40, 0.96);
-      --panel-soft: rgba(20, 29, 53, 0.92);
-      --line: #2a3558;
-      --text: #eef4ff;
-      --muted: #9eb0d3;
-      --accent: #4fd1c5;
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --bg-hero: linear-gradient(180deg, #eef4ff 0%, #f8fbff 45%, #f5f7fb 100%);
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --line: #e3e8f2;
+      --line-strong: #d7deea;
+      --text: #162033;
+      --muted: #6b778d;
+      --accent: #2563eb;
       --accent-2: #60a5fa;
-      --ok: #31c48d;
-      --warn: #f59e0b;
-      --bad: #f87171;
-      --chip: rgba(79, 209, 197, 0.12);
-      --shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+      --accent-soft: #eef4ff;
+      --ok: #16a34a;
+      --ok-soft: #ecfdf3;
+      --warn: #d97706;
+      --warn-soft: #fff7ed;
+      --bad: #dc2626;
+      --bad-soft: #fef2f2;
+      --chip: #eff5ff;
+      --shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
-      background: linear-gradient(180deg, #08101f, #0e1830 38%, #09101d);
+      background: var(--bg-hero);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }}
     .wrap {{
-      max-width: 1120px;
+      max-width: 1180px;
       margin: 0 auto;
-      padding: 28px 18px 54px;
+      padding: 32px 20px 56px;
     }}
     .hero {{
       display: grid;
       grid-template-columns: 1.3fr 0.9fr;
-      gap: 16px;
-      margin-bottom: 18px;
+      gap: 18px;
+      margin-bottom: 20px;
     }}
     .panel {{
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 22px;
-      padding: 20px;
+      border-radius: 24px;
+      padding: 22px;
       box-shadow: var(--shadow);
     }}
     .title {{
-      font-size: 30px;
+      font-size: 34px;
       font-weight: 800;
-      margin: 0 0 10px;
+      letter-spacing: -0.02em;
+      margin: 0 0 12px;
     }}
     .sub {{
       color: var(--muted);
-      line-height: 1.7;
+      line-height: 1.8;
       margin: 0;
+      font-size: 15px;
     }}
     .steps {{
       display: flex;
-      gap: 10px;
+      gap: 12px;
       flex-wrap: wrap;
-      margin-top: 18px;
+      margin-top: 20px;
     }}
     .chip {{
-      padding: 8px 12px;
+      padding: 9px 13px;
       border-radius: 999px;
       background: var(--chip);
-      border: 1px solid rgba(79, 209, 197, 0.18);
-      color: #dffcf6;
+      border: 1px solid #dce6fb;
+      color: var(--accent);
       font-weight: 700;
       font-size: 13px;
+    }}
+    .hero-note {{
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
     }}
     .cards {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 12px;
-      margin-top: 14px;
+      margin-top: 16px;
     }}
     .card {{
       background: var(--panel-soft);
@@ -121,7 +139,7 @@ HTML_TEMPLATE = """<!doctype html>
     .k {{
       font-size: 13px;
       color: var(--muted);
-      margin-bottom: 6px;
+      margin-bottom: 8px;
     }}
     .v {{
       font-size: 17px;
@@ -132,27 +150,34 @@ HTML_TEMPLATE = """<!doctype html>
     .layout {{
       display: grid;
       grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
-      gap: 18px;
+      gap: 20px;
       align-items: start;
     }}
     h2 {{
       margin: 0 0 14px;
-      font-size: 20px;
+      font-size: 23px;
+      letter-spacing: -0.01em;
+    }}
+    .section-sub {{
+      margin: -4px 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
     }}
     .grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px;
+      gap: 16px;
     }}
     .simple-grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px;
+      gap: 16px;
     }}
     .field {{
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 9px;
     }}
     .field.full {{
       grid-column: 1 / -1;
@@ -160,94 +185,114 @@ HTML_TEMPLATE = """<!doctype html>
     label {{
       font-size: 13px;
       font-weight: 700;
-      color: #dbe8ff;
+      color: var(--text);
     }}
     input, textarea, select {{
       width: 100%;
-      border-radius: 14px;
-      border: 1px solid var(--line);
-      background: rgba(8, 13, 26, 0.84);
+      border-radius: 16px;
+      border: 1px solid var(--line-strong);
+      background: #ffffff;
       color: var(--text);
-      padding: 12px 13px;
-      font-size: 14px;
+      padding: 13px 14px;
+      font-size: 15px;
       outline: none;
+      box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.02);
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }}
+    input:focus, textarea:focus, select:focus {{
+      border-color: #9ec1ff;
+      box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+    }}
+    input[readonly], textarea[readonly] {{
+      background: #f8fafc;
     }}
     textarea {{
-      min-height: 84px;
+      min-height: 110px;
       resize: vertical;
-      line-height: 1.5;
+      line-height: 1.7;
     }}
     .hint {{
       color: var(--muted);
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.6;
     }}
     details {{
       margin-top: 18px;
       border: 1px solid var(--line);
-      border-radius: 16px;
-      background: rgba(8, 13, 26, 0.55);
-      padding: 12px 14px;
+      border-radius: 18px;
+      background: #fafcff;
+      padding: 14px 16px;
     }}
     summary {{
       cursor: pointer;
       font-weight: 700;
-      color: #dbe8ff;
+      color: var(--text);
       user-select: none;
     }}
     .advanced-body {{
-      margin-top: 14px;
+      margin-top: 16px;
+    }}
+    .action-help {{
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: var(--accent-soft);
+      border: 1px solid #dce6fb;
+      color: #35527e;
+      font-size: 14px;
+      line-height: 1.7;
     }}
     .actions {{
       display: flex;
-      gap: 10px;
+      gap: 12px;
       flex-wrap: wrap;
       margin-top: 18px;
     }}
     button {{
       appearance: none;
-      border: none;
-      border-radius: 14px;
-      padding: 12px 16px;
+      border: 1px solid transparent;
+      border-radius: 16px;
+      padding: 13px 18px;
       cursor: pointer;
       font-size: 14px;
       font-weight: 800;
-      transition: transform 0.14s ease, opacity 0.14s ease;
+      transition: transform 0.14s ease, opacity 0.14s ease, box-shadow 0.14s ease;
     }}
     button:hover {{
       transform: translateY(-1px);
+      box-shadow: 0 10px 18px rgba(37, 99, 235, 0.12);
     }}
     button.primary {{
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      color: #07101c;
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+      color: #ffffff;
     }}
     button.secondary {{
-      background: rgba(96, 165, 250, 0.18);
-      color: #ddecff;
-      border: 1px solid rgba(96, 165, 250, 0.26);
+      background: #ffffff;
+      color: #28456f;
+      border-color: #d8e3f8;
     }}
     button.warn {{
-      background: rgba(245, 158, 11, 0.18);
-      color: #ffe9bf;
-      border: 1px solid rgba(245, 158, 11, 0.28);
+      background: #ffffff;
+      color: #9a3412;
+      border-color: #fed7aa;
     }}
     .status {{
       margin-top: 16px;
       border-radius: 16px;
-      padding: 12px 14px;
-      background: rgba(79, 209, 197, 0.08);
-      border: 1px solid rgba(79, 209, 197, 0.18);
+      padding: 14px 16px;
+      background: var(--ok-soft);
+      border: 1px solid #cdeed8;
       line-height: 1.65;
       white-space: pre-wrap;
       word-break: break-word;
     }}
     .status.warn {{
-      background: rgba(245, 158, 11, 0.08);
-      border-color: rgba(245, 158, 11, 0.22);
+      background: var(--warn-soft);
+      border-color: #f6d7ae;
     }}
     .status.bad {{
-      background: rgba(248, 113, 113, 0.08);
-      border-color: rgba(248, 113, 113, 0.22);
+      background: var(--bad-soft);
+      border-color: #fecaca;
     }}
     .mono {{
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -255,7 +300,7 @@ HTML_TEMPLATE = """<!doctype html>
     }}
     .log {{
       margin-top: 16px;
-      background: rgba(7, 12, 24, 0.95);
+      background: #f8fafc;
       border: 1px solid var(--line);
       border-radius: 16px;
       padding: 14px;
@@ -267,7 +312,7 @@ HTML_TEMPLATE = """<!doctype html>
       line-height: 1.55;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 12px;
-      color: #e1ebff;
+      color: #24324a;
     }}
     .muted {{
       color: var(--muted);
@@ -288,25 +333,31 @@ HTML_TEMPLATE = """<!doctype html>
       <div class="panel">
         <div class="title">{title}</div>
         <p class="sub">
-          把原来的 3 步命令行流程变成一个可视化向导：
-          先填配置，再点按钮保存并开启自动运行，最后直接在页面里跑一次真实测试。
+          这是一个更轻松的设置页。你只需要填账号和密码，
+          保存之后就能启用开机自动运行，并在页面里直接完成一次真实测试。
         </p>
         <div class="steps">
-          <div class="chip">1. 填写账号配置</div>
-          <div class="chip">2. 保存到本机</div>
-          <div class="chip">3. 开启开机自启</div>
-          <div class="chip">4. 立即测试</div>
+          <div class="chip">步骤 1：填写账号</div>
+          <div class="chip">步骤 2：保存配置</div>
+          <div class="chip">步骤 3：启用自动运行</div>
+          <div class="chip">步骤 4：立即测试</div>
+        </div>
+        <div class="hero-note">
+          默认按中国移动处理，不用再手动输入运营商后缀、AC IP、AC 名称。
+          只有你以后想微调高级行为时，再展开高级选项即可。
         </div>
       </div>
       <div class="panel">
-        <h2>当前状态</h2>
+        <h2>当前概览</h2>
+        <div class="section-sub">这里会实时告诉你：配置是否完成、自动运行是否开启，以及最近一次测试结果。</div>
         <div class="cards" id="cards"></div>
       </div>
     </div>
 
     <div class="layout">
       <div class="panel">
-        <h2>设置页面</h2>
+        <h2>基础设置</h2>
+        <div class="section-sub">按你的目标，默认只需要填账号和密码。其他内容都已经替你收起来了。</div>
         <div class="simple-grid">
           <div class="field">
             <label for="username">校园网账号</label>
@@ -324,7 +375,7 @@ HTML_TEMPLATE = """<!doctype html>
         </div>
 
         <details>
-          <summary>高级选项（可选，默认不用填）</summary>
+          <summary>高级选项（通常不用填）</summary>
           <div class="advanced-body">
             <div class="grid">
               <div class="field">
@@ -375,25 +426,28 @@ HTML_TEMPLATE = """<!doctype html>
 
         <div class="grid">
           <div class="field">
-            <label for="notes">说明</label>
-            <textarea id="notes" readonly>现在按你的目标，默认只需要填账号和密码。
-保存后再点“启用自动运行”或“立即测试一次”即可。
-“立即测试”会执行一次真实重登录：如果当前在线，可能会有几秒瞬时断网，这是正常现象。</textarea>
+            <label for="notes">使用说明</label>
+            <textarea id="notes" readonly>推荐顺序：先保存配置，再启用自动运行，最后点“立即测试一次”。
+
+如果测试时你本来就在线，脚本会先解绑再重新登录，所以可能会有几秒短暂断网，这是正常现象。
+
+页面会持续刷新状态，但不会再覆盖你正在输入的内容。</textarea>
           </div>
         </div>
+        <div class="action-help">推荐顺序：先点“保存配置”，再点“启用自动运行”，最后点“立即测试一次”。如果只是想临时停用，再点“停用自动运行”。</div>
         <div class="actions">
-          <button id="save-button" class="primary">保存配置</button>
-          <button id="enable-button" class="secondary">启用自动运行</button>
-          <button id="test-button" class="primary">立即测试一次</button>
+          <button id="save-button" class="primary">1. 保存配置</button>
+          <button id="enable-button" class="secondary">2. 启用自动运行</button>
+          <button id="test-button" class="primary">3. 立即测试一次</button>
           <button id="disable-button" class="warn">停用自动运行</button>
         </div>
         <div id="page-status" class="status">正在读取当前状态…</div>
       </div>
 
       <div class="panel">
-        <h2>测试输出</h2>
+        <h2>测试与日志</h2>
         <div class="hint">
-          这里会显示“立即测试一次”的实时结果，以及最近日志片段。
+          这里会显示“立即测试一次”的实时结果，以及最近日志片段。测试成功后，你能直接看到解绑、等待、预热和重新登录的全过程。
         </div>
         <div id="test-status" class="status warn">还没有开始测试。</div>
         <div id="test-log" class="log">等待操作…</div>
@@ -412,6 +466,30 @@ HTML_TEMPLATE = """<!doctype html>
     function textOrDash(value) {{
       if (value === null || value === undefined || value === "") return "未设置";
       return String(value);
+    }}
+
+    function describeExitCode(test) {{
+      if (test.running) return "测试进行中";
+      if (test.last_exit_code === null || test.last_exit_code === undefined) return "还没测试";
+      if (test.last_exit_code === 0) return "测试成功";
+      if (test.last_exit_code === 3) return "已跳过";
+      return `失败（exit=${{test.last_exit_code}}）`;
+    }}
+
+    function describeLastTest(test) {{
+      if (test.running) {{
+        return `正在测试（开始于 ${{test.started_at || "刚刚"}}）`;
+      }}
+      if (test.last_exit_code === null || test.last_exit_code === undefined) {{
+        return "你还没有执行过测试";
+      }}
+      if (test.last_exit_code === 0) {{
+        return `最近一次测试成功${{test.finished_at ? "，完成于 " + test.finished_at : ""}}`;
+      }}
+      if (test.last_exit_code === 3) {{
+        return `最近一次测试被跳过${{test.finished_at ? "，完成于 " + test.finished_at : ""}}`;
+      }}
+      return `最近一次测试失败（exit=${{test.last_exit_code}}）${{test.finished_at ? "，完成于 " + test.finished_at : ""}}`;
     }}
 
     function populateForm(cfg) {{
@@ -467,9 +545,9 @@ HTML_TEMPLATE = """<!doctype html>
         ["配置文件", data.config_path],
         ["状态文件", data.state_path],
         ["日志文件", data.log_path],
-        ["自动运行", data.autostart_loaded ? "已启用" : "未启用"],
-        ["配置是否完整", data.config_ready ? "看起来已可用" : "还缺少关键字段"],
-        ["最近测试", data.test.running ? "测试中" : textOrDash(data.test.last_exit_summary)],
+        ["开机自动运行", data.autostart_loaded ? "已经开启" : "还没开启"],
+        ["配置状态", data.config_ready ? "已经可用" : "还没填完整"],
+        ["最近测试", describeExitCode(data.test)],
       ];
       byId("cards").innerHTML = cards.map(([k, v]) => `
         <div class="card">
@@ -481,8 +559,9 @@ HTML_TEMPLATE = """<!doctype html>
       byId("page-status").className = `status ${{data.config_ready ? "" : "warn"}}`.trim();
       byId("page-status").textContent =
         `配置文件：${{data.config_path}}\n` +
-        `自动运行：${{data.autostart_loaded ? "已加载" : "未加载"}}\n` +
-        `当前建议：${{data.config_ready ? "可以直接启用自动运行或立即测试。" : "现在默认只需要把账号和密码填好，然后点“保存配置”。"}}`;
+        `自动运行：${{data.autostart_loaded ? "已开启" : "未开启"}}\n` +
+        `最近测试：${{describeLastTest(data.test)}}\n` +
+        `当前建议：${{data.config_ready ? "可以直接启用自动运行，或者先再点一次测试确认。" : "先把账号和密码填好，然后点“保存配置”。"}}`;
 
       renderTest(data.test, data.log_tail);
     }}
@@ -494,8 +573,8 @@ HTML_TEMPLATE = """<!doctype html>
         statusText = `测试中：${{test.started_at || "刚刚开始"}}`;
         statusClass = "status";
       }} else if (test.last_exit_code !== null) {{
-        statusText = `最近测试结束：exit=${{test.last_exit_code}}${{test.finished_at ? "，完成时间 " + test.finished_at : ""}}`;
-        statusClass = test.last_exit_code === 0 ? "status" : "status bad";
+        statusText = describeLastTest(test);
+        statusClass = test.last_exit_code === 0 ? "status" : (test.last_exit_code === 3 ? "status warn" : "status bad");
       }}
       byId("test-status").className = statusClass;
       byId("test-status").textContent = statusText;
