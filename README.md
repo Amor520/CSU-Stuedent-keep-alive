@@ -2,7 +2,7 @@
 
 轻量、低打扰的 CSU 校园网自动重登录工具。核心目标只有两个：
 - 首次运行就做一次真实“重新登录”；
-- 之后只在第 6 天或意外掉线时再出手，尽量不常驻、不轮询、不耗电。
+- 之后只在第 6 天或意外掉线时再出手，同时把桌面端交互压到最傻瓜式。
 
 当前仓库分成两层：
 - `auto_relogin.py`：真正的最小运行时。
@@ -35,16 +35,16 @@
 - 这对开机自启更稳，因为 launchd 拉起脚本时，IP 往往比 SSID 更早可用。
 
 ### 4. 为什么说它能耗很低
-- 推荐运行方式不是常驻 daemon，而是 macOS `launchd`：
-  - 登录系统时跑一次
-  - 之后每 `18000` 秒，也就是每 5 小时跑一次
-- 绝大多数时间根本没有常驻 Python 进程。
-- 每次运行只做几件很小的事：
+- 现在安装包默认是“macOS app 常驻 + 后台轻量检查”：
+  - 登录系统时自动拉起 app
+  - 关闭窗口后 app 继续在后台保活
+  - 真正的网络检查由内部 runner 低频执行
+- 每次检查只做几件很小的事：
   - 读本地状态文件
   - 判断当前 IP/网络
   - 必要时发 1~4 个 HTTPS GET 请求
   - 写回一个小 JSON 状态文件
-- 所以从资源模型上看，它已经接近“能不醒就不醒”的最简方案了。严格说我不敢承诺“绝对最低”，但对这个需求来说，已经是非常低功耗、非常低打扰的实现。
+- 所以从资源模型上看，它仍然是轻量级后台任务，不是那种高频轮询、持续占资源的守护程序。
 
 ## 快速开始
 1. 安装依赖：
@@ -70,23 +70,23 @@
 8. 如果你想看一份可视化验证报告，可以运行 `./visual_verify_once.sh`。它会真实执行一次 `--once`，随后自动生成并打开 HTML 时间线报告，方便你肉眼确认“是否无感、何时解绑、何时重新登录”。
 9. 如果你想看“动态实时观测”效果，可以运行 `./visual_verify_live.sh`。它会启动一个本地实时页面；页面里有“在线演示 开始测试”按钮，点一下就会强制执行一次真实重登录演示，并每秒刷新时间线和状态卡片。
 
-### macOS 定时巡检（启动一次 + 每 5 小时）
+### macOS 常驻后台模式
 1. 确保 `.venv/bin/python`、`config.toml` 路径正确，并复制模板：
    ```bash
    cp launchd/csu.autorelogin.plist.example ~/Library/LaunchAgents/cn.csu.autorelogin.plist
    ```
 2. 按需编辑 `~/Library/LaunchAgents/cn.csu.autorelogin.plist`：
-   - `ProgramArguments` 中的 Python、脚本、配置路径替换成你实际的绝对路径；保持 `--once` 让脚本运行一次后退出。
-   - `StartInterval` 设为 `18000` 秒即可实现“启动 RunAtLoad 一次 + 之后每 5h 再跑一次”。
+   - `ProgramArguments` 中的 Python、脚本、配置路径替换成你实际的绝对路径。
+   - 如果你想做成和安装包一致的“后台常驻”，直接不要加 `--once`，而是让脚本自己跑 `run_forever`。
 3. 加载并立即触发一次：
    ```bash
    launchctl unload ~/Library/LaunchAgents/cn.csu.autorelogin.plist 2>/dev/null || true
    launchctl load ~/Library/LaunchAgents/cn.csu.autorelogin.plist
    ```
-   LaunchAgent 会在你登录 macOS 时自动启动一次，此后每隔 18000 秒再运行脚本一次，期间不常驻进程，能耗比每 2 小时巡检更低。
-4. 当前推荐策略是：首次运行强制做一次重登录；之后只在脚本启动时检查本地时间戳，若距离上次成功登录已满 `144` 小时，就再次执行“先解绑/下线再登录”。
+   LaunchAgent 会在你登录 macOS 时自动启动后台进程；如果你保留 `--once`，就还是单次执行模型，如果去掉 `--once`，就是常驻后台模型。
+4. 当前推荐策略是：首次运行强制做一次重登录；之后只在脚本检查时判断本地时间戳，若距离上次成功登录已满 `144` 小时，就再次执行“先解绑/下线再登录”。
 5. 现在默认只要本机 IPv4 落在 `client.campus_ipv4_cidrs` 里就会继续执行；如果你额外配置了 `client.required_ssid`，脚本会优先认这个 SSID，但 SSID 不匹配时仍可回退到校园网 IP 判断。
-6. 这类低频方案的代价是：如果学校临时把你踢下线，而时间戳还没到第 6 天，那么最坏要等到下一次 5 小时巡检才会自动恢复。它更省电，但没有高频巡检那么即时。
+6. 这类低频方案的代价是：如果学校临时把你踢下线，恢复速度取决于 `check_interval_seconds`，它更省电，但没有秒级高频巡检那么激进。
 
 ### macOS 安装包构建
 如果你想直接产出一个可安装的 `.pkg`：
@@ -96,7 +96,7 @@
 
 构建完成后会在 `dist/` 下生成类似：
 ```text
-dist/CSUStudentWiFi-1.3.1.pkg
+dist/CSUStudentWiFi-1.4.0.pkg
 ```
 
 安装包会放入这些最小运行时文件：
@@ -112,7 +112,7 @@ dist/CSUStudentWiFi-1.3.1.pkg
 安装后的默认行为：
 - 自动在当前用户目录下准备 `~/Library/Application Support/CSUStudentWiFi/config.toml`
 - 自动生成 `~/Library/LaunchAgents/cn.csu.autorelogin.plist`
-- 如果检测到配置里已经不是占位账号/密码，就会自动加载 LaunchAgent
+- 如果检测到配置里已经不是占位账号/密码，就会自动加载 LaunchAgent，并以隐藏方式启动 app
 - 如果还是示例配置，就只准备文件，不会盲目上线
 
 ### 安装后的原生设置程序
@@ -128,10 +128,11 @@ open /Applications/CSUStudentWiFi.app
 "/Library/Application Support/CSUStudentWiFi/open_setup_wizard.sh"
 ```
 
-它现在不再依赖浏览器，而是直接弹出一个 macOS 原生窗口，把下面这 3 步合成一个可视化流程：
-- 默认只填账号 / 密码
-- 保存配置并启用自动运行
-- 立即执行一次真实测试，并在窗口里看结果
+它现在不再依赖浏览器，而是直接弹出一个 macOS 原生窗口，把下面这几件事压成一个最简流程：
+- 只填账号 / 密码 / 运营商
+- 保存配置
+- 开启开机自启
+- 关闭窗口后继续后台运行；想彻底停用时，必须重新打开 app 点“关闭后台运行”
 
 如果 Launchpad 没有立刻刷新，也可以直接在 Finder 里打开 `/Applications/CSUStudentWiFi.app`，或者继续使用兼容入口脚本。
 
@@ -142,8 +143,8 @@ open /Applications/CSUStudentWiFi.app
 - 如果当前不在线，即使没到第 6 天，也会直接尝试登录，兼顾意外掉线后的恢复。
 - `wlan_user_ip` 自动从本地 UDP socket 获取；`wlan_user_mac` 现默认覆盖为 `000000000000` 以匹配 CSU 当前门户实测行为，也可自行改回真实 MAC。
 - 登录成功将记录时间戳与消息，可在 `auto_relogin.log` 中查看。
-- 上次成功登录时间会写入 `auto_relogin_state.json`，因此即使用 `launchd` 每次只执行 `--once`，脚本也能记住会话年龄。
-- `check_interval_seconds` 仍保留给 `run_forever` 模式；如果你只用 macOS 的 `launchd`，核心调度由 `RunAtLoad + StartInterval=18000` 完成。
+- 上次成功登录时间会写入 `auto_relogin_state.json`，因此无论是单次运行还是常驻运行，都能记住会话年龄。
+- `check_interval_seconds` 用于常驻后台模式的检查间隔；安装包默认就是这个模式。
 
 ## 守护模式 / 开机自启
 - macOS/Linux 可借助 `launchd`、`systemd --user` 或 `cron @reboot` 调用 `auto_relogin.py --config …`。

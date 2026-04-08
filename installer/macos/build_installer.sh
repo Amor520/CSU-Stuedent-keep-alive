@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build/macos"
 VENV_DIR="$BUILD_DIR/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-VERSION="${VERSION:-1.3.1}"
+VERSION="${VERSION:-1.4.0}"
 PKG_ID="cn.csu.autorelogin"
 APP_SUPPORT_SUBDIR="CSUStudentWiFi"
 PKGROOT="$BUILD_DIR/pkgroot"
@@ -14,13 +14,18 @@ DIST_DIR="$ROOT_DIR/dist"
 BIN_NAME="csu-auto-relogin"
 SETUP_BIN_NAME="csu-auto-relogin-setup"
 PKG_NAME="CSUStudentWiFi-${VERSION}.pkg"
+ICON_DIR="$BUILD_DIR/icon"
+ICON_SOURCE="$ICON_DIR/AppIcon-1024.png"
+ICONSET_DIR="$ICON_DIR/AppIcon.iconset"
+ICON_ICNS="$ICON_DIR/AppIcon.icns"
 
 echo "[1/6] Preparing build directories"
 rm -rf "$BUILD_DIR"
 mkdir -p \
   "$BUILD_DIR" \
   "$DIST_DIR" \
-  "$PAYLOAD_BASE/bin"
+  "$PAYLOAD_BASE/bin" \
+  "$ICON_DIR"
 
 echo "[2/6] Preparing build virtualenv"
 "$PYTHON_BIN" -m venv "$VENV_DIR"
@@ -45,9 +50,20 @@ swiftc \
   "$ROOT_DIR/setup_gui.swift" \
   -o "$BUILD_DIR/dist/$SETUP_BIN_NAME"
 
+echo "[3.7/6] Rendering app icon"
+swift "$ROOT_DIR/installer/macos/support/generate_app_icon.swift" "$ICON_SOURCE"
+mkdir -p "$ICONSET_DIR"
+for size in 16 32 128 256 512; do
+  sips -z "$size" "$size" "$ICON_SOURCE" --out "$ICONSET_DIR/icon_${size}x${size}.png" >/dev/null
+  doubled=$((size * 2))
+  sips -z "$doubled" "$doubled" "$ICON_SOURCE" --out "$ICONSET_DIR/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS"
+
 echo "[4/6] Preparing package payload"
 cp "$BUILD_DIR/dist/$BIN_NAME" "$PAYLOAD_BASE/bin/$BIN_NAME"
 cp "$BUILD_DIR/dist/$SETUP_BIN_NAME" "$PAYLOAD_BASE/bin/$SETUP_BIN_NAME"
+cp "$ICON_ICNS" "$PAYLOAD_BASE/AppIcon.icns"
 cp "$ROOT_DIR/config.example.toml" "$PAYLOAD_BASE/config.example.toml"
 cp "$ROOT_DIR/README.md" "$PAYLOAD_BASE/README.md"
 cp "$ROOT_DIR/installer/macos/support/setup_launch_agent.sh" "$PAYLOAD_BASE/setup_launch_agent.sh"

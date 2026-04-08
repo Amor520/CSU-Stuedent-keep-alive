@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import AppKit
 import Darwin
 
 struct SetupConfig {
@@ -23,6 +24,97 @@ enum StatusTone {
     case good
 }
 
+enum ProviderOption: String, CaseIterable, Identifiable {
+    case mobile = "@cmccn"
+    case unicom = "@unicomn"
+    case telecom = "@telecomn"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .mobile:
+            return "中国移动"
+        case .unicom:
+            return "中国联通"
+        case .telecom:
+            return "中国电信"
+        }
+    }
+
+    static func fromSuffix(_ suffix: String) -> ProviderOption {
+        ProviderOption(rawValue: suffix.trimmingCharacters(in: .whitespacesAndNewlines)) ?? .mobile
+    }
+}
+
+extension Notification.Name {
+    static let managedQuitAttempted = Notification.Name("ManagedQuitAttempted")
+}
+
+@MainActor
+final class ManagedAppRuntime {
+    static let shared = ManagedAppRuntime()
+
+    let windowDelegate = ManagedWindowDelegate()
+    var allowTermination = false
+    var requiresManagedShutdown = false
+    private(set) var launchedInBackground = ProcessInfo.processInfo.arguments.contains("--background")
+
+    private init() {}
+
+    func installWindowDelegate(on window: NSWindow) {
+        guard window.delegate !== windowDelegate else {
+            return
+        }
+        window.delegate = windowDelegate
+        window.isReleasedWhenClosed = false
+    }
+
+    func hideToBackground() {
+        for window in NSApp.windows {
+            window.orderOut(nil)
+        }
+        NSApp.hide(nil)
+    }
+
+    func reopenMainWindow() {
+        for window in NSApp.windows {
+            window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func blockExternalQuitAndReveal() {
+        NotificationCenter.default.post(name: .managedQuitAttempted, object: nil)
+        reopenMainWindow()
+    }
+
+    func completeManagedShutdown() {
+        allowTermination = true
+        requiresManagedShutdown = false
+        NSApp.terminate(nil)
+    }
+
+    func consumeBackgroundLaunchFlag() -> Bool {
+        let value = launchedInBackground
+        launchedInBackground = false
+        return value
+    }
+}
+
+@MainActor
+final class ManagedWindowDelegate: NSObject, NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if !ManagedAppRuntime.shared.requiresManagedShutdown {
+            NSApp.terminate(nil)
+            return false
+        }
+        sender.orderOut(nil)
+        NSApp.hide(nil)
+        return false
+    }
+}
+
 @MainActor
 final class SetupViewModel: ObservableObject {
     let appSupportDir = URL(fileURLWithPath: "/Library/Application Support/CSUStudentWiFi", isDirectory: true)
@@ -30,11 +122,11 @@ final class SetupViewModel: ObservableObject {
         .appendingPathComponent("Library/Application Support/CSUStudentWiFi", isDirectory: true)
 
     @Published var config = SetupConfig()
-    @Published var showAdvanced = false
     @Published var configPathText = ""
     @Published var statePathText = ""
     @Published var logPathText = ""
     @Published var autoRunText = "未开启"
+    @Published var backgroundStateText = "后台未开启"
     @Published var configStateText = "还没填完整"
     @Published var lastTestText = "你还没有执行过测试"
     @Published var pageStatus = "正在读取当前状态..."
@@ -48,12 +140,13 @@ final class SetupViewModel: ObservableObject {
     @Published var lastStartedAt = ""
     @Published var lastRunOutput = ""
 
-    private let notesText = """
-推荐顺序：先保存配置，再启用自动运行，最后点“立即测试一次”。
-
-“立即测试一次”会直接强制执行一次真实重新登录，不会参考本地时间戳。
-如果测试时你本来就在线，脚本会先解绑再重新登录，所以可能会有几秒短暂断网，这是正常现象。
-"""
+    private var pageStatusOverrideText: String?
+    private var pageStatusOverrideTone: StatusTone?
+    private var pageStatusOverrideExpiry = Date.distantPast
+    private var backgroundProcess: Process?
+    private var backgroundRestartWorkItem: DispatchWorkItem?
+    private var managedQuitObserver: NSObjectProtocol?
+    private var suppressNextBackgroundRestart = false
 
     var configURL: URL {
         userSupportDir.appendingPathComponent("config.toml")
@@ -79,8 +172,38 @@ final class SetupViewModel: ObservableObject {
         appSupportDir.appendingPathComponent("bin/csu-auto-relogin")
     }
 
-    var notes: String {
-        notesText
+    init() {
+        managedQuitObserver = NotificationCenter.default.addObserver(
+            forName: .managedQuitAttempted,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.setTransientPageStatus(
+                    "后台仍在运行。想彻底停止，请打开窗口后点“关闭后台运行”。",
+                    tone: .warn,
+                    holdFor: 10
+                )
+            }
+        }
+    }
+
+    deinit {
+        if let managedQuitObserver {
+            NotificationCenter.default.removeObserver(managedQuitObserver)
+        }
+    }
+
+    var canEnableAutostart: Bool {
+        isConfigReady && autoRunText != "已经开启" && !isTesting
+    }
+
+    var canRunImmediateTest: Bool {
+        isConfigReady && !isTesting
+    }
+
+    var canDisableAutostart: Bool {
+        autoRunText == "已经开启" && !isTesting
     }
 
     func loadInitialState() {
@@ -89,20 +212,15 @@ final class SetupViewModel: ObservableObject {
         refreshRuntimeState()
     }
 
-    func refreshRuntimeState() {
+    func refreshRuntimeState(forceRestartRunner: Bool = false) {
         configPathText = configURL.path
         statePathText = stateURL.path
         logPathText = logURL.path
         configStateText = isConfigReady ? "已经可用" : "还没填完整"
         autoRunText = isLaunchAgentLoaded() ? "已经开启" : "还没开启"
+        syncBackgroundRunner(forceRestart: forceRestartRunner)
         lastTestText = describeLastTest()
-        pageStatus = """
-配置文件：\(configPathText)
-自动运行：\(autoRunText)
-最近测试：\(describeLastTest())
-当前建议：\(isConfigReady ? "可以直接启用自动运行，或者先再点一次测试确认。" : "先把账号和密码填好，然后点“保存配置”。")
-"""
-        pageStatusTone = isConfigReady ? .good : .warn
+        applyPageStatus()
         if !isTesting {
             testStatus = describeLastTest()
             testStatusTone = toneForLastTest()
@@ -117,18 +235,13 @@ final class SetupViewModel: ObservableObject {
         do {
             try rendered.write(to: configURL, atomically: true, encoding: .utf8)
             chmod(configURL.path, 0o600)
-            pageStatus = """
-配置已保存到：
-\(configURL.path)
-
-默认中国移动后缀会自动保留。
-下一步直接点“启用自动运行”，或者先点“立即测试一次”。
-"""
-            pageStatusTone = .good
-            refreshRuntimeState()
+            setTransientPageStatus(
+                "配置已保存。下一步点“开启开机自启”后，这个软件会在开机后自动进入后台运行。",
+                tone: .good
+            )
+            refreshRuntimeState(forceRestartRunner: true)
         } catch {
-            pageStatus = "保存失败：\(error.localizedDescription)"
-            pageStatusTone = .bad
+            setTransientPageStatus("保存失败：\(error.localizedDescription)", tone: .bad, holdFor: 12)
         }
     }
 
@@ -136,7 +249,8 @@ final class SetupViewModel: ObservableObject {
         runAuxiliaryCommand(
             executable: setupScriptURL,
             arguments: ["--load-if-ready"],
-            successPrefix: "自动运行已处理"
+            successPrefix: "开机自启和后台运行已开启",
+            forceRestartRunner: true
         )
     }
 
@@ -144,19 +258,30 @@ final class SetupViewModel: ObservableObject {
         runAuxiliaryCommand(
             executable: disableScriptURL,
             arguments: [],
-            successPrefix: "自动运行已停用"
+            successPrefix: "后台运行已关闭",
+            terminateAppAfterSuccess: true
         )
+    }
+
+    func openConfigFile() {
+        NSWorkspace.shared.open(configURL)
+    }
+
+    func openLogFile() {
+        NSWorkspace.shared.open(logURL)
+    }
+
+    func revealSupportFolder() {
+        NSWorkspace.shared.activateFileViewerSelecting([userSupportDir])
     }
 
     func runImmediateTest() {
         if isTesting {
-            pageStatus = "已经有一个测试在运行，请稍等。"
-            pageStatusTone = .warn
+            setTransientPageStatus("已经有一个测试在运行，请稍等。", tone: .warn)
             return
         }
         if !isConfigReady {
-            pageStatus = "配置还没填完整。现在默认只需要账号和密码。"
-            pageStatusTone = .warn
+            setTransientPageStatus("配置还没填完整。现在默认只需要账号和密码。", tone: .warn)
             return
         }
         isTesting = true
@@ -165,6 +290,11 @@ final class SetupViewModel: ObservableObject {
         testStatusTone = .normal
         lastRunOutput = ""
         testOutput = "正在执行真实重新登录，请稍等..."
+        setTransientPageStatus(
+            "正在执行一次真实的强制重登录。测试期间如果你原本在线，出现几秒短暂断网属于正常现象。",
+            tone: .normal,
+            holdFor: 3600
+        )
 
         let executable = runnerURL
         let args = ["--config", configURL.path, "--once", "--force-relogin", "--verbose"]
@@ -178,6 +308,19 @@ final class SetupViewModel: ObservableObject {
                 self.lastTestText = self.describeLastTest()
                 self.testStatus = self.describeLastTest()
                 self.testStatusTone = self.toneForLastTest()
+                let summary: String
+                let tone: StatusTone
+                if result.exitCode == 0 {
+                    summary = "真实测试已完成。最近一次重登录链路执行成功。"
+                    tone = .good
+                } else if result.exitCode == 3 {
+                    summary = "真实测试已完成，但本次流程被跳过了。可以检查当前网络环境后再试一次。"
+                    tone = .warn
+                } else {
+                    summary = "真实测试失败（exit=\(result.exitCode)）。可以先查看本次输出和最近日志。"
+                    tone = .bad
+                }
+                self.setTransientPageStatus(summary, tone: tone, holdFor: 12)
                 let chunks = [
                     result.output.isEmpty ? "" : "[本次测试输出]\n\(result.output)",
                     self.currentLogChunk(),
@@ -299,18 +442,34 @@ campus_ipv4_cidrs = [\(cidrText)]
 """
     }
 
-    private func runAuxiliaryCommand(executable: URL, arguments: [String], successPrefix: String) {
+    private func runAuxiliaryCommand(
+        executable: URL,
+        arguments: [String],
+        successPrefix: String,
+        forceRestartRunner: Bool = false,
+        terminateAppAfterSuccess: Bool = false
+    ) {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Self.runProcess(executable: executable, arguments: arguments)
             DispatchQueue.main.async {
                 if result.exitCode == 0 {
-                    self.pageStatus = "\(successPrefix)\n\n\(result.output.isEmpty ? "完成" : result.output)"
-                    self.pageStatusTone = .good
+                    self.setTransientPageStatus(
+                        "\(successPrefix)\n\n\(result.output.isEmpty ? "完成" : result.output)",
+                        tone: .good
+                    )
+                    if terminateAppAfterSuccess {
+                        self.stopBackgroundRunner()
+                        ManagedAppRuntime.shared.completeManagedShutdown()
+                        return
+                    }
                 } else {
-                    self.pageStatus = "\(successPrefix)失败：\(result.output.isEmpty ? "exit=\(result.exitCode)" : result.output)"
-                    self.pageStatusTone = .bad
+                    self.setTransientPageStatus(
+                        "\(successPrefix)失败：\(result.output.isEmpty ? "exit=\(result.exitCode)" : result.output)",
+                        tone: .bad,
+                        holdFor: 12
+                    )
                 }
-                self.refreshRuntimeState()
+                self.refreshRuntimeState(forceRestartRunner: forceRestartRunner)
             }
         }
     }
@@ -328,9 +487,149 @@ campus_ipv4_cidrs = [\(cidrText)]
         return ""
     }
 
+    private func currentRecommendation() -> String {
+        if !isConfigReady {
+            return "填好账号、密码和运营商后保存。"
+        }
+        if isTesting {
+            return "正在执行真实测试。"
+        }
+        if autoRunText == "已经开启" && backgroundProcess?.isRunning == true {
+            return "后台已经常驻运行。点左上角关闭只会缩到后台，想停用请点“关闭后台运行”。"
+        }
+        if autoRunText == "已经开启" {
+            return "开机自启已经打开，后台检查进程正在准备启动。"
+        }
+        return "配置已保存后，再点“开启开机自启”即可。"
+    }
+
+    private func currentRecommendationTone() -> StatusTone {
+        if isTesting {
+            return .normal
+        }
+        if !isConfigReady {
+            return .warn
+        }
+        if autoRunText == "已经开启" {
+            return .good
+        }
+        return .normal
+    }
+
     private func currentLogChunk() -> String {
         let tail = tailText(logURL, limit: 80)
         return tail.isEmpty ? "" : "[最近日志]\n\(tail)"
+    }
+
+    private func syncBackgroundRunner(forceRestart: Bool) {
+        ManagedAppRuntime.shared.requiresManagedShutdown = (autoRunText == "已经开启")
+
+        if forceRestart {
+            stopBackgroundRunner()
+        }
+
+        if autoRunText == "已经开启" && isConfigReady {
+            startBackgroundRunnerIfNeeded()
+        } else {
+            stopBackgroundRunner()
+        }
+
+        if backgroundProcess?.isRunning == true {
+            backgroundStateText = "后台运行中"
+        } else if autoRunText == "已经开启" {
+            backgroundStateText = "后台启动中"
+        } else {
+            backgroundStateText = "后台未开启"
+        }
+    }
+
+    private func startBackgroundRunnerIfNeeded() {
+        guard backgroundProcess?.isRunning != true else {
+            return
+        }
+        guard FileManager.default.isExecutableFile(atPath: runnerURL.path) else {
+            setTransientPageStatus("后台检查组件不存在，请重新安装应用。", tone: .bad, holdFor: 12)
+            backgroundStateText = "后台缺失"
+            return
+        }
+
+        backgroundRestartWorkItem?.cancel()
+
+        let process = Process()
+        process.executableURL = runnerURL
+        process.arguments = ["--config", configURL.path, "--verbose"]
+
+        if let devNull = FileHandle(forWritingAtPath: "/dev/null") {
+            process.standardOutput = devNull
+            process.standardError = devNull
+        }
+
+        process.terminationHandler = { [weak self] terminatedProcess in
+            DispatchQueue.main.async {
+                self?.handleBackgroundRunnerTermination(exitCode: terminatedProcess.terminationStatus)
+            }
+        }
+
+        do {
+            try process.run()
+            backgroundProcess = process
+            backgroundStateText = "后台运行中"
+        } catch {
+            backgroundProcess = nil
+            backgroundStateText = "后台启动失败"
+            setTransientPageStatus("后台检查进程启动失败：\(error.localizedDescription)", tone: .bad, holdFor: 12)
+        }
+    }
+
+    private func stopBackgroundRunner() {
+        backgroundRestartWorkItem?.cancel()
+        backgroundRestartWorkItem = nil
+
+        guard let process = backgroundProcess else {
+            return
+        }
+
+        if process.isRunning {
+            suppressNextBackgroundRestart = true
+            process.terminate()
+        }
+        backgroundProcess = nil
+    }
+
+    private func handleBackgroundRunnerTermination(exitCode: Int32) {
+        backgroundProcess = nil
+
+        if suppressNextBackgroundRestart {
+            suppressNextBackgroundRestart = false
+            if autoRunText == "已经开启" {
+                backgroundStateText = "后台启动中"
+            } else {
+                backgroundStateText = "后台未开启"
+            }
+            return
+        }
+
+        let shouldRestart = autoRunText == "已经开启" && isConfigReady
+        if !shouldRestart {
+            backgroundStateText = "后台未开启"
+            return
+        }
+
+        backgroundStateText = "后台重启中"
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.startBackgroundRunnerIfNeeded()
+            self?.refreshRuntimeState()
+        }
+        backgroundRestartWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: workItem)
+
+        if exitCode != 0 && exitCode != 15 {
+            setTransientPageStatus(
+                "后台检查进程意外退出（exit=\(exitCode)），正在自动拉起。",
+                tone: .warn,
+                holdFor: 10
+            )
+        }
     }
 
     private func describeLastTest() -> String {
@@ -434,6 +733,35 @@ campus_ipv4_cidrs = [\(cidrText)]
         return formatter.string(from: Date())
     }
 
+    private func applyPageStatus() {
+        if
+            let overrideText = pageStatusOverrideText,
+            let overrideTone = pageStatusOverrideTone,
+            pageStatusOverrideExpiry > Date()
+        {
+            pageStatus = overrideText
+            pageStatusTone = overrideTone
+            return
+        }
+        clearTransientPageStatus()
+        pageStatus = currentRecommendation()
+        pageStatusTone = currentRecommendationTone()
+    }
+
+    private func setTransientPageStatus(_ text: String, tone: StatusTone, holdFor seconds: TimeInterval = 8) {
+        pageStatusOverrideText = text
+        pageStatusOverrideTone = tone
+        pageStatusOverrideExpiry = Date().addingTimeInterval(seconds)
+        pageStatus = text
+        pageStatusTone = tone
+    }
+
+    private func clearTransientPageStatus() {
+        pageStatusOverrideText = nil
+        pageStatusOverrideTone = nil
+        pageStatusOverrideExpiry = .distantPast
+    }
+
     private func tailText(_ url: URL, limit: Int) -> String {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             return ""
@@ -461,7 +789,286 @@ campus_ipv4_cidrs = [\(cidrText)]
     }
 }
 
-struct StatusCard: View {
+enum Theme {
+    static let backgroundTop = Color(red: 0.96, green: 0.97, blue: 0.995)
+    static let backgroundBottom = Color(red: 0.93, green: 0.95, blue: 0.985)
+    static let sidebarTop = Color(red: 0.985, green: 0.989, blue: 1.0)
+    static let sidebarBottom = Color(red: 0.944, green: 0.958, blue: 0.992)
+    static let panel = Color.white
+    static let panelSoft = Color(red: 0.973, green: 0.978, blue: 0.989)
+    static let border = Color(red: 0.87, green: 0.9, blue: 0.95)
+    static let ink = Color(red: 0.13, green: 0.17, blue: 0.25)
+    static let subtext = Color(red: 0.41, green: 0.47, blue: 0.58)
+    static let blue = Color(red: 0.25, green: 0.43, blue: 0.9)
+    static let blueSoft = Color(red: 0.92, green: 0.95, blue: 1.0)
+    static let orange = Color(red: 0.95, green: 0.65, blue: 0.25)
+    static let mint = Color(red: 0.2, green: 0.63, blue: 0.46)
+    static let rose = Color(red: 0.83, green: 0.35, blue: 0.34)
+}
+
+struct BrandMark: View {
+    let size: CGFloat
+
+    init(size: CGFloat = 72) {
+        self.size = size
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: size * 0.29, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.98, green: 0.99, blue: 1.0),
+                            Color(red: 0.82, green: 0.89, blue: 1.0),
+                            Color(red: 0.98, green: 0.89, blue: 0.77),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            RoundedRectangle(cornerRadius: size * 0.23, style: .continuous)
+                .fill(Color.white.opacity(0.92))
+                .padding(size * 0.09)
+            Image(systemName: "wifi")
+                .font(.system(size: size * 0.34, weight: .semibold))
+                .foregroundStyle(Theme.ink)
+                .offset(y: -size * 0.045)
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .font(.system(size: size * 0.22, weight: .semibold))
+                .foregroundStyle(Theme.orange)
+                .offset(x: size * 0.17, y: size * 0.18)
+        }
+        .frame(width: size, height: size)
+        .shadow(color: Color.black.opacity(0.08), radius: 18, x: 0, y: 10)
+    }
+}
+
+struct InstallerCard<Content: View>: View {
+    let title: String
+    let subtitle: String?
+    let content: Content
+
+    init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(Theme.ink)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.subtext)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            content
+        }
+        .padding(22)
+        .background(Theme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.04), radius: 18, x: 0, y: 10)
+    }
+}
+
+struct ToneBanner: View {
+    let text: String
+    let tone: StatusTone
+
+    var palette: (background: Color, border: Color, text: Color, icon: String) {
+        switch tone {
+        case .good:
+            return (
+                Color(red: 0.94, green: 0.99, blue: 0.96),
+                Color(red: 0.82, green: 0.93, blue: 0.86),
+                Theme.mint,
+                "checkmark.circle.fill"
+            )
+        case .warn:
+            return (
+                Color(red: 1.0, green: 0.97, blue: 0.92),
+                Color(red: 0.96, green: 0.86, blue: 0.7),
+                Color(red: 0.63, green: 0.4, blue: 0.11),
+                "exclamationmark.circle.fill"
+            )
+        case .bad:
+            return (
+                Color(red: 0.99, green: 0.95, blue: 0.95),
+                Color(red: 0.96, green: 0.83, blue: 0.83),
+                Theme.rose,
+                "xmark.circle.fill"
+            )
+        case .normal:
+            return (
+                Theme.blueSoft,
+                Color(red: 0.82, green: 0.88, blue: 0.97),
+                Theme.blue,
+                "bolt.circle.fill"
+            )
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: palette.icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(palette.text)
+                .padding(.top, 1)
+            Text(text)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(palette.text)
+                .lineSpacing(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(15)
+        .background(palette.background)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(palette.border, lineWidth: 1)
+        )
+    }
+}
+
+struct StepRow: View {
+    let number: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Text(number)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(Theme.blue)
+                .frame(width: 30, height: 30)
+                .background(Theme.blueSoft)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(detail)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.subtext)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+struct StatusPill: View {
+    let title: String
+    let value: String
+    let tone: StatusTone
+
+    var accent: Color {
+        switch tone {
+        case .good:
+            return Theme.mint
+        case .warn:
+            return Theme.orange
+        case .bad:
+            return Theme.rose
+        case .normal:
+            return Theme.blue
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(accent)
+                    .frame(width: 8, height: 8)
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.subtext)
+            }
+            Text(value)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(16)
+        .background(Theme.panelSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+    }
+}
+
+struct StrategyRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Theme.blue)
+                .frame(width: 34, height: 34)
+                .background(Theme.blueSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(detail)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.subtext)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+struct InputField<Content: View>: View {
+    let title: String
+    let caption: String?
+    let content: Content
+
+    init(title: String, caption: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.caption = caption
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.ink)
+            content
+            if let caption {
+                Text(caption)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.subtext)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ReadOnlyField: View {
     let title: String
     let value: String
 
@@ -469,422 +1076,632 @@ struct StatusCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color(red: 0.42, green: 0.47, blue: 0.56))
+                .foregroundStyle(Theme.ink)
             Text(value)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color(red: 0.09, green: 0.13, blue: 0.2))
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Theme.panelSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 1)
+                )
         }
-        .padding(16)
-        .background(Color(red: 0.97, green: 0.98, blue: 0.99))
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(Color(red: 0.89, green: 0.91, blue: 0.95), lineWidth: 1)
-        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-struct ToneBox: View {
-    let text: String
-    let tone: StatusTone
+struct PathRow: View {
+    let title: String
+    let value: String
 
-    var colors: (Color, Color, Color) {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.subtext)
+            Text(value)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(Theme.ink)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 3)
+    }
+}
+
+struct HeroBadge: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: icon)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.blue)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.76))
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Theme.border.opacity(0.9), lineWidth: 1)
+            )
+    }
+}
+
+struct ProgressRing: View {
+    let progress: Double
+    let label: String
+    let caption: String
+    let tone: StatusTone
+    let size: CGFloat
+
+    init(progress: Double, label: String, caption: String, tone: StatusTone, size: CGFloat = 116) {
+        self.progress = progress
+        self.label = label
+        self.caption = caption
+        self.tone = tone
+        self.size = size
+    }
+
+    private var accent: Color {
         switch tone {
         case .good:
-            return (
-                Color(red: 0.93, green: 0.99, blue: 0.95),
-                Color(red: 0.81, green: 0.93, blue: 0.85),
-                Color(red: 0.11, green: 0.38, blue: 0.2)
-            )
+            return Theme.mint
         case .warn:
-            return (
-                Color(red: 1.0, green: 0.97, blue: 0.92),
-                Color(red: 0.96, green: 0.84, blue: 0.67),
-                Color(red: 0.64, green: 0.37, blue: 0.07)
-            )
+            return Theme.orange
         case .bad:
-            return (
-                Color(red: 0.99, green: 0.95, blue: 0.95),
-                Color(red: 0.98, green: 0.8, blue: 0.8),
-                Color(red: 0.63, green: 0.13, blue: 0.13)
-            )
+            return Theme.rose
         case .normal:
-            return (
-                Color(red: 0.94, green: 0.96, blue: 1.0),
-                Color(red: 0.83, green: 0.88, blue: 0.97),
-                Color(red: 0.16, green: 0.27, blue: 0.47)
-            )
+            return Theme.blue
         }
+    }
+
+    private var clampedProgress: CGFloat {
+        CGFloat(min(max(progress, 0.04), 1.0))
     }
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(colors.2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(colors.0)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(colors.1, lineWidth: 1)
-            )
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.45), lineWidth: size * 0.1)
+            Circle()
+                .trim(from: 0, to: clampedProgress)
+                .stroke(
+                    accent,
+                    style: StrokeStyle(lineWidth: size * 0.1, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+            VStack(spacing: 4) {
+                Text(label)
+                    .font(.system(size: size * 0.19, weight: .bold))
+                    .foregroundStyle(Theme.ink)
+                Text(caption)
+                    .font(.system(size: size * 0.095, weight: .semibold))
+                    .foregroundStyle(Theme.subtext)
+            }
+        }
+        .frame(width: size, height: size)
     }
 }
 
-struct ActionButtonStyle: ButtonStyle {
-    let fill: Color
-    let text: Color
-    let border: Color
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14, weight: .bold))
-            .foregroundStyle(text)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 13)
-            .background(fill)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(border, lineWidth: 1)
-            )
-            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
-            .shadow(color: Color.black.opacity(configuration.isPressed ? 0.02 : 0.06), radius: 10, x: 0, y: 6)
-    }
-}
-
-struct FieldCard<Content: View>: View {
+struct MiniStatRow: View {
+    let icon: String
     let title: String
-    let hint: String?
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.blue)
+                .frame(width: 32, height: 32)
+                .background(Theme.blueSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.subtext)
+                Text(value)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+struct QuickAccessButton: View {
+    let icon: String
+    let title: String
+    let detail: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.blue)
+                    .frame(width: 38, height: 38)
+                    .background(Theme.blueSoft)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.ink)
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.subtext)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Theme.subtext)
+            }
+            .padding(14)
+            .background(Theme.panelSoft)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SettingsGroup<Content: View>: View {
+    let icon: String
+    let title: String
+    let subtitle: String?
     let content: Content
 
-    init(title: String, hint: String? = nil, @ViewBuilder content: () -> Content) {
+    init(icon: String, title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+        self.icon = icon
         self.title = title
-        self.hint = hint
+        self.subtitle = subtitle
         self.content = content()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color(red: 0.09, green: 0.13, blue: 0.2))
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.blue)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.78))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.ink)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.subtext)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
             content
-            if let hint {
-                Text(hint)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color(red: 0.42, green: 0.47, blue: 0.56))
-                    .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(18)
+        .background(Theme.panelSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+    }
+}
+
+struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let window = view.window {
+                onResolve(window)
             }
         }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if let window = nsView.window {
+                onResolve(window)
+            }
+        }
+    }
+}
+
+extension View {
+    func installerInputStyle() -> some View {
+        self
+            .textFieldStyle(.plain)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(Theme.ink)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color.white.opacity(0.94))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Theme.border, lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.02), radius: 6, x: 0, y: 3)
     }
 }
 
 struct ContentView: View {
     @StateObject private var model = SetupViewModel()
-    private let timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+    @State private var showPassword = false
+    private let timer = Timer.publish(every: 3.0, on: .main, in: .common).autoconnect()
+
+    var passwordEntryWarning: String? {
+        let password = model.config.password
+        let suspiciousPunctuation: [(String, String)] = [
+            ("。", "."),
+            ("，", ","),
+            ("；", ";"),
+            ("：", ":"),
+        ]
+        for (wide, ascii) in suspiciousPunctuation where password.contains(wide) {
+            return "当前密码里包含全角符号“\(wide)”，如果你本来想输入英文“\(ascii)”请改回半角字符。"
+        }
+        return nil
+    }
+
+    var providerSelection: Binding<ProviderOption> {
+        Binding(
+            get: { ProviderOption.fromSuffix(model.config.accountSuffix) },
+            set: { model.config.accountSuffix = $0.rawValue }
+        )
+    }
+
+    var backgroundStatusText: String {
+        model.backgroundStateText
+    }
+
+    var runningBehaviorHint: String {
+        "开启后会开机自动启动。点左上角关闭只会缩到后台，想彻底停止必须重新打开软件点“关闭后台运行”。"
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                heroSection
-                HStack(alignment: .top, spacing: 20) {
-                    leftPanel
-                    rightPanel
-                }
+        GeometryReader { proxy in
+            let detailWidth = proxy.size.width
+
+            ZStack {
+                backgroundArt
+
+                detailPane(width: detailWidth)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .padding(24)
         }
-        .frame(minWidth: 1180, minHeight: 780)
-        .background(Color(red: 0.96, green: 0.97, blue: 0.99))
+        .frame(minWidth: 980, minHeight: 760)
         .onAppear {
             model.loadInitialState()
+            if ManagedAppRuntime.shared.consumeBackgroundLaunchFlag() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    ManagedAppRuntime.shared.hideToBackground()
+                }
+            }
         }
         .onReceive(timer) { _ in
             model.refreshRuntimeState()
         }
+        .animation(.easeInOut(duration: 0.22), value: model.isTesting)
+        .background(
+            WindowAccessor { window in
+                ManagedAppRuntime.shared.installWindowDelegate(on: window)
+            }
+        )
     }
 
-    var heroSection: some View {
-        HStack(alignment: .top, spacing: 20) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("CSU Wi-Fi 设置中心")
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(Color(red: 0.09, green: 0.13, blue: 0.2))
-                Text("现在它是一个原生程序窗口，不再依赖浏览器。你只需要填账号和密码，保存之后就能启用自动运行，并在这里直接完成一次真实测试。")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Color(red: 0.42, green: 0.47, blue: 0.56))
-                    .lineSpacing(4)
-                HStack(spacing: 10) {
-                    chip("步骤 1：填写账号")
-                    chip("步骤 2：保存配置")
-                    chip("步骤 3：启用自动运行")
-                    chip("步骤 4：立即测试")
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                ToneBox(
-                    text: "默认按中国移动处理，不用再手动输入运营商后缀、AC IP、AC 名称。只有你以后想微调高级行为时，再展开高级选项即可。",
-                    tone: .normal
-                )
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(24)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 24))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24)
-                    .stroke(Color(red: 0.89, green: 0.91, blue: 0.95), lineWidth: 1)
+    var backgroundArt: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Theme.backgroundTop, Theme.backgroundBottom],
+                startPoint: .top,
+                endPoint: .bottom
             )
-            .shadow(color: Color.black.opacity(0.06), radius: 20, x: 0, y: 8)
+
+            Circle()
+                .fill(Color.white.opacity(0.75))
+                .frame(width: 460, height: 460)
+                .blur(radius: 110)
+                .offset(x: -260, y: -260)
+
+            Circle()
+                .fill(Theme.blue.opacity(0.15))
+                .frame(width: 340, height: 340)
+                .blur(radius: 84)
+                .offset(x: 430, y: -220)
+
+            Circle()
+                .fill(Theme.orange.opacity(0.12))
+                .frame(width: 420, height: 420)
+                .blur(radius: 96)
+                .offset(x: 380, y: 260)
+        }
+        .ignoresSafeArea()
+    }
+
+    func detailPane(width: CGFloat) -> some View {
+        let contentWidth = min(max(width - 72, 0), 760)
+
+        return VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    headerSection(width: contentWidth)
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("账号登录")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundStyle(Theme.ink)
+
+                        LazyVGrid(columns: formGridColumns(for: contentWidth), alignment: .leading, spacing: 16) {
+                            InputField(title: "校园网账号") {
+                                TextField("例如 8208231325", text: $model.config.username)
+                                    .installerInputStyle()
+                            }
+                            InputField(title: "校园网密码") {
+                                HStack(spacing: 10) {
+                                    Group {
+                                        if showPassword {
+                                            TextField("输入真实密码", text: $model.config.password)
+                                        } else {
+                                            SecureField("输入真实密码", text: $model.config.password)
+                                        }
+                                    }
+                                    .installerInputStyle()
+
+                                    Button {
+                                        showPassword.toggle()
+                                    } label: {
+                                        Image(systemName: showPassword ? "eye.slash" : "eye")
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundStyle(Theme.blue)
+                                            .frame(width: 42, height: 42)
+                                            .background(Color.white.opacity(0.94))
+                                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                    .stroke(Theme.border, lineWidth: 1)
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(showPassword ? "隐藏密码" : "显示密码")
+                                }
+                            }
+                        }
+
+                        InputField(title: "运营商") {
+                            Picker("运营商", selection: providerSelection) {
+                                ForEach(ProviderOption.allCases) { provider in
+                                    Text(provider.title)
+                                        .tag(provider)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+
+                        if let passwordEntryWarning = passwordEntryWarning {
+                            ToneBanner(text: passwordEntryWarning, tone: .warn)
+                        }
+
+                        Text(runningBehaviorHint)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.subtext)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(32)
+                .frame(maxWidth: contentWidth, alignment: .leading)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
+            }
+
+            Divider()
+
+            footerBar()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    func headerSection(width: CGFloat) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 22) {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 14) {
+                        BrandMark(size: 72)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("CSU Student Wi-Fi")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Theme.blue)
+                            Text("校园网后台登录")
+                                .font(.system(size: 30, weight: .bold))
+                                .foregroundStyle(Theme.ink)
+                        }
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) {
+                            HeroBadge(icon: "power", text: backgroundStatusText)
+                            HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
+                            HeroBadge(icon: "checkmark.shield", text: "关闭窗口继续后台运行")
+                        }
+                        VStack(alignment: .leading, spacing: 10) {
+                            HeroBadge(icon: "power", text: backgroundStatusText)
+                            HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
+                            HeroBadge(icon: "checkmark.shield", text: "关闭窗口继续后台运行")
+                        }
+                    }
+                }
+                Spacer(minLength: 20)
+                Image(systemName: model.backgroundStateText == "后台运行中" ? "power.circle.fill" : "pause.circle.fill")
+                    .font(.system(size: 40, weight: .semibold))
+                    .foregroundStyle(model.backgroundStateText == "后台运行中" ? Theme.mint : Theme.orange)
+                    .frame(width: 78, height: 78)
+                    .background(Color.white.opacity(0.88))
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .stroke(Theme.border, lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 6)
+            }
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 14) {
+                    BrandMark(size: 68)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("CSU Student Wi-Fi")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.blue)
+                        Text("校园网后台登录")
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundStyle(Theme.ink)
+                    }
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        HeroBadge(icon: "power", text: backgroundStatusText)
+                        HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        HeroBadge(icon: "power", text: backgroundStatusText)
+                        HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
+                    }
+                }
+                Text(runningBehaviorHint)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.subtext)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    func footerBar() -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 14) {
+                footerSummary
+                Spacer(minLength: 20)
+                footerButtons
+            }
 
             VStack(alignment: .leading, spacing: 14) {
-                Text("当前概览")
-                    .font(.system(size: 23, weight: .bold))
-                Text("这里会实时告诉你：配置是否完成、自动运行是否开启，以及最近一次测试结果。")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color(red: 0.42, green: 0.47, blue: 0.56))
-                    .lineSpacing(3)
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    StatusCard(title: "配置文件", value: model.configPathText)
-                    StatusCard(title: "状态文件", value: model.statePathText)
-                    StatusCard(title: "日志文件", value: model.logPathText)
-                    StatusCard(title: "开机自动运行", value: model.autoRunText)
-                    StatusCard(title: "配置状态", value: model.configStateText)
-                    StatusCard(title: "最近测试", value: model.lastTestText)
-                }
+                footerSummary
+                footerButtons
             }
-            .frame(width: 390, alignment: .leading)
-            .padding(24)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 24))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24)
-                    .stroke(Color(red: 0.89, green: 0.91, blue: 0.95), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.06), radius: 20, x: 0, y: 8)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 18)
+    }
+
+    var footerSummary: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(model.pageStatus)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(3)
         }
     }
 
-    var leftPanel: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("基础设置")
-                .font(.system(size: 23, weight: .bold))
-            Text("按你的目标，默认只需要填账号和密码。其他内容都已经替你收起来了。")
-                .font(.system(size: 14))
-                .foregroundStyle(Color(red: 0.42, green: 0.47, blue: 0.56))
-
-            HStack(spacing: 16) {
-                FieldCard(title: "校园网账号") {
-                    TextField("例如 8208231325", text: $model.config.username)
-                        .textFieldStyle(.plain)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 14)
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(red: 0.84, green: 0.88, blue: 0.93), lineWidth: 1))
-                }
-                FieldCard(title: "默认运营商", hint: "默认按中国移动处理；如果以后想改联通/电信，在下方高级选项里再改。") {
-                    Text("中国移动（默认 @cmccn）")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 14)
-                        .background(Color(red: 0.98, green: 0.98, blue: 0.99))
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(red: 0.84, green: 0.88, blue: 0.93), lineWidth: 1))
-                }
+    var footerButtons: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                saveButton
+                enableButton
+                disableButton
             }
 
-            FieldCard(title: "校园网密码") {
-                SecureField("输入真实密码", text: $model.config.password)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 14)
-                    .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(red: 0.84, green: 0.88, blue: 0.93), lineWidth: 1))
+            VStack(alignment: .leading, spacing: 10) {
+                saveButton
+                HStack(spacing: 10) {
+                    enableButton
+                    disableButton
+                }
             }
-
-            DisclosureGroup(isExpanded: $model.showAdvanced) {
-                VStack(spacing: 16) {
-                    HStack(spacing: 16) {
-                        FieldCard(title: "运营商后缀") {
-                            TextField("@cmccn", text: $model.config.accountSuffix)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        FieldCard(title: "限定 Wi-Fi 名称（可选）") {
-                            TextField("留空则主要按校园网 IP 判断", text: $model.config.requiredSSID)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                    HStack(spacing: 16) {
-                        FieldCard(title: "AC IP（可选）") {
-                            TextField("现在默认不用填", text: $model.config.acIP)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        FieldCard(title: "AC 名称（可选）") {
-                            TextField("现在默认不用填", text: $model.config.acName)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                    HStack(spacing: 16) {
-                        FieldCard(title: "校园网 IPv4 段") {
-                            TextField("100.64.0.0/10", text: $model.config.campusCIDRs)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        FieldCard(title: "第几小时主动重登") {
-                            TextField("144", text: $model.config.forceReloginHours)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                    HStack(spacing: 16) {
-                        FieldCard(title: "解绑后等待秒数") {
-                            TextField("6", text: $model.config.reloginCooldownSeconds)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        FieldCard(title: "网卡名（可选）") {
-                            TextField("例如 en0", text: $model.config.interfaceName)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                    FieldCard(title: "MAC 覆盖值") {
-                        TextField("000000000000", text: $model.config.macOverride)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-                .padding(.top, 16)
-            } label: {
-                Text("高级选项（通常不用填）")
-                    .font(.system(size: 16, weight: .semibold))
-            }
-            .padding(18)
-            .background(Color(red: 0.98, green: 0.99, blue: 1.0))
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color(red: 0.89, green: 0.91, blue: 0.95), lineWidth: 1))
-
-            FieldCard(title: "使用说明") {
-                TextEditor(text: .constant(model.notes))
-                    .font(.system(size: 14))
-                    .scrollContentBackground(.hidden)
-                    .background(Color(red: 0.98, green: 0.98, blue: 0.99))
-                    .frame(minHeight: 122)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(red: 0.89, green: 0.91, blue: 0.95), lineWidth: 1))
-                    .disabled(true)
-            }
-
-            ToneBox(
-                text: "推荐顺序：先点“保存配置”，再点“启用自动运行”，最后点“立即测试一次”。这里的“立即测试一次”会强制重新登录，不会参考本地时间戳。",
-                tone: .normal
-            )
-
-            HStack(spacing: 12) {
-                Button("1. 保存配置") {
-                    model.saveConfig()
-                }
-                .buttonStyle(ActionButtonStyle(
-                    fill: Color(red: 0.15, green: 0.39, blue: 0.92),
-                    text: .white,
-                    border: Color(red: 0.15, green: 0.39, blue: 0.92)
-                ))
-
-                Button("2. 启用自动运行") {
-                    model.enableAutostart()
-                }
-                .buttonStyle(ActionButtonStyle(
-                    fill: .white,
-                    text: Color(red: 0.16, green: 0.27, blue: 0.47),
-                    border: Color(red: 0.85, green: 0.89, blue: 0.95)
-                ))
-
-                Button("3. 立即测试一次") {
-                    model.runImmediateTest()
-                }
-                .buttonStyle(ActionButtonStyle(
-                    fill: Color(red: 0.15, green: 0.39, blue: 0.92),
-                    text: .white,
-                    border: Color(red: 0.15, green: 0.39, blue: 0.92)
-                ))
-
-                Button("停用自动运行") {
-                    model.disableAutostart()
-                }
-                .buttonStyle(ActionButtonStyle(
-                    fill: .white,
-                    text: Color(red: 0.6, green: 0.2, blue: 0.1),
-                    border: Color(red: 0.99, green: 0.84, blue: 0.7)
-                ))
-            }
-
-            ToneBox(text: model.pageStatus, tone: model.pageStatusTone)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(24)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24)
-                .stroke(Color(red: 0.89, green: 0.91, blue: 0.95), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.06), radius: 20, x: 0, y: 8)
     }
 
-    var rightPanel: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("测试与日志")
-                .font(.system(size: 23, weight: .bold))
-            Text("这里会显示“立即测试一次”的实时结果，以及最近日志片段。测试成功后，你能直接看到解绑、等待、预热和重新登录的全过程。")
-                .font(.system(size: 14))
-                .foregroundStyle(Color(red: 0.42, green: 0.47, blue: 0.56))
-                .lineSpacing(3)
-
-            ToneBox(text: model.testStatus, tone: model.testStatusTone)
-
-            ScrollView {
-                Text(model.testOutput)
-                    .font(.system(size: 14, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color(red: 0.14, green: 0.2, blue: 0.29))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-            }
-            .frame(maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
-            .background(Color(red: 0.98, green: 0.98, blue: 0.99))
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(Color(red: 0.89, green: 0.91, blue: 0.95), lineWidth: 1)
-            )
+    var saveButton: some View {
+        Button {
+            model.saveConfig()
+        } label: {
+            Label("保存配置", systemImage: "square.and.arrow.down")
         }
-        .frame(width: 390, alignment: .leading)
-        .padding(24)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24)
-                .stroke(Color(red: 0.89, green: 0.91, blue: 0.95), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.06), radius: 20, x: 0, y: 8)
+        .buttonStyle(.bordered)
+        .controlSize(.large)
     }
 
-    func chip(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Color(red: 0.15, green: 0.39, blue: 0.92))
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .background(Color(red: 0.94, green: 0.96, blue: 1.0))
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(Color(red: 0.86, green: 0.9, blue: 0.97), lineWidth: 1))
+    var enableButton: some View {
+        Button {
+            model.enableAutostart()
+        } label: {
+            Label("开启开机自启", systemImage: "play.fill")
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Theme.blue)
+        .controlSize(.large)
+        .disabled(!model.canEnableAutostart)
+    }
+
+    var disableButton: some View {
+        Button {
+            model.disableAutostart()
+        } label: {
+            Label("关闭后台运行", systemImage: "power.circle")
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Theme.rose)
+        .controlSize(.large)
+        .disabled(!model.canDisableAutostart)
+    }
+
+    func formGridColumns(for width: CGFloat) -> [GridItem] {
+        if width > 820 {
+            return Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top), count: 2)
+        }
+        return [GridItem(.flexible(), spacing: 16, alignment: .top)]
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if ManagedAppRuntime.shared.allowTermination || !ManagedAppRuntime.shared.requiresManagedShutdown {
+            return .terminateNow
+        }
+        ManagedAppRuntime.shared.blockExternalQuitAndReveal()
+        return .terminateCancel
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        ManagedAppRuntime.shared.reopenMainWindow()
+        return true
     }
 }
 
 @main
 struct CSUAutoReloginSetupApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("CSU Student Wi-Fi") {
             ContentView()
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.automatic)
     }
 }
