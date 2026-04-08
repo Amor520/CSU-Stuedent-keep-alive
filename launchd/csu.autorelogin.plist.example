@@ -6,21 +6,21 @@
     <string>cn.csu.autorelogin</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/zhangyu/Documents/my-project/CSU-student-WiFi/.venv/bin/python</string>
-        <string>/Users/zhangyu/Documents/my-project/CSU-student-WiFi/auto_relogin.py</string>
+        <string>/usr/bin/python3</string>
+        <string>/Users/your-name/Documents/CSU-student-WiFi/auto_relogin.py</string>
         <string>--config</string>
-        <string>/Users/zhangyu/Documents/my-project/CSU-student-WiFi/config.toml</string>
+        <string>/Users/your-name/Library/Application Support/CSUStudentWiFi/config.toml</string>
         <string>--once</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/zhangyu/Documents/my-project/CSU-student-WiFi</string>
+    <string>/Users/your-name/Documents/CSU-student-WiFi</string>
     <key>RunAtLoad</key>
     <true/>
     <key>StartInterval</key>
     <integer>18000</integer>
     <key>StandardOutPath</key>
-    <string>/tmp/csu_autorelogin.stdout.log</string>
+    <string>/Users/your-name/Library/Application Support/CSUStudentWiFi/launchd.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/csu_autorelogin.stderr.log</string>
+    <string>/Users/your-name/Library/Application Support/CSUStudentWiFi/launchd.stderr.log</string>
 </dict>
 </plist>

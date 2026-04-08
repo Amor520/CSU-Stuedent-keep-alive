@@ -1,6 +1,50 @@
 # CSU WiFi Auto Re-login
 
-轻量脚本，帮助在校园网 7 天强制下线或掉线时自动重新登录 `portal.csu.edu.cn:802`。
+轻量、低打扰的 CSU 校园网自动重登录工具。核心目标只有两个：
+- 首次运行就做一次真实“重新登录”；
+- 之后只在第 6 天或意外掉线时再出手，尽量不常驻、不轮询、不耗电。
+
+当前仓库分成两层：
+- `auto_relogin.py`：真正的最小运行时。
+- 其余抓包 / 可视化脚本：只在分析 portal 或演示时用，默认不进 macOS 安装包。
+
+## 实现原理
+
+### 1. 为什么不是“每 2 小时硬登录一次”
+- 那样当然也能续命，但会更频繁地唤醒脚本、更多无意义请求，也更容易在你本来在线时制造瞬断。
+- 现在的策略是“低频检查 + 到点才重登”：
+  - 第一次运行：因为状态文件默认视为 Unix 时间戳 `0`，所以一定触发一次完整重登录。
+  - 之后：只要距离上次成功登录还没到 `144` 小时（第 6 天），脚本就不主动踢线。
+  - 但如果学校提前把你踢下线，脚本下次运行发现离线，也会直接补登录。
+- 这样能把“主动操作次数”压到很低，同时避开第 7 天强退。
+
+### 2. 为什么流程必须是 `unbind -> wait -> warmup -> login`
+- 这是基于你这台机器实测抓包得出的，而不是拍脑袋写的。
+- CSU 门户上，稳定成功的流程不是直接 `login`，而是：
+  1. 先调 `mac/unbind`
+  2. 等待 6 秒左右，让 portal 后端把旧会话清掉
+  3. 预热 portal 根页面和登录页
+  4. 再调 `/eportal/portal/login`
+- 这么做的原因很简单：它更接近浏览器里的真实交互顺序，成功率也比“直接裸调 login”更稳。
+- 如果 `mac/unbind` 不可用，脚本还保留 `logout` 回退路径。
+
+### 3. 为什么不用“只看 Wi-Fi 名称”
+- 只盯着某个 SSID，在校园网改名、设备拿不到 SSID、或开机早期系统还没上报 SSID 时，容易误判然后一直跳过。
+- 现在默认主判断是本机 IPv4 是否落在 `100.64.0.0/10` 这样的校园网地址段里。
+- `required_ssid` 还在，但变成可选辅助信号，不再是唯一门槛。
+- 这对开机自启更稳，因为 launchd 拉起脚本时，IP 往往比 SSID 更早可用。
+
+### 4. 为什么说它能耗很低
+- 推荐运行方式不是常驻 daemon，而是 macOS `launchd`：
+  - 登录系统时跑一次
+  - 之后每 `18000` 秒，也就是每 5 小时跑一次
+- 绝大多数时间根本没有常驻 Python 进程。
+- 每次运行只做几件很小的事：
+  - 读本地状态文件
+  - 判断当前 IP/网络
+  - 必要时发 1~4 个 HTTPS GET 请求
+  - 写回一个小 JSON 状态文件
+- 所以从资源模型上看，它已经接近“能不醒就不醒”的最简方案了。严格说我不敢承诺“绝对最低”，但对这个需求来说，已经是非常低功耗、非常低打扰的实现。
 
 ## 快速开始
 1. 安装依赖：
@@ -44,6 +88,30 @@
 5. 现在默认只要本机 IPv4 落在 `client.campus_ipv4_cidrs` 里就会继续执行；如果你额外配置了 `client.required_ssid`，脚本会优先认这个 SSID，但 SSID 不匹配时仍可回退到校园网 IP 判断。
 6. 这类低频方案的代价是：如果学校临时把你踢下线，而时间戳还没到第 6 天，那么最坏要等到下一次 5 小时巡检才会自动恢复。它更省电，但没有高频巡检那么即时。
 
+### macOS 安装包构建
+如果你想直接产出一个可安装的 `.pkg`：
+```bash
+./installer/macos/build_installer.sh
+```
+
+构建完成后会在 `dist/` 下生成类似：
+```text
+dist/CSUStudentWiFi-1.0.0.pkg
+```
+
+安装包会放入这些最小运行时文件：
+- `/Library/Application Support/CSUStudentWiFi/bin/csu-auto-relogin`
+- `/Library/Application Support/CSUStudentWiFi/config.example.toml`
+- `/Library/Application Support/CSUStudentWiFi/setup_launch_agent.sh`
+- `/Library/Application Support/CSUStudentWiFi/disable_launch_agent.sh`
+- `/Library/Application Support/CSUStudentWiFi/open_config.sh`
+
+安装后的默认行为：
+- 自动在当前用户目录下准备 `~/Library/Application Support/CSUStudentWiFi/config.toml`
+- 自动生成 `~/Library/LaunchAgents/cn.csu.autorelogin.plist`
+- 如果检测到配置里已经不是占位账号/密码，就会自动加载 LaunchAgent
+- 如果还是示例配置，就只准备文件，不会盲目上线
+
 ## 实现思路
 - 每次脚本启动先读取 `auto_relogin_state.json`；如果文件不存在，就把上次登录时间视为 Unix 纪元 `0`，从而在第一次运行时必定触发重登录。
 - 在 macOS 上，脚本会优先判断当前 IPv4 是否落在 `client.campus_ipv4_cidrs`（默认 `100.64.0.0/10`）内；`client.required_ssid` 只作为辅助信号，避免校园网 SSID 改名后开机自启一直被跳过。
@@ -57,6 +125,14 @@
 ## 守护模式 / 开机自启
 - macOS/Linux 可借助 `launchd`、`systemd --user` 或 `cron @reboot` 调用 `auto_relogin.py --config …`。
 - 运行在旁路软路由时建议使用 `screen`/`tmux` 保持脚本后台运行。
+
+## 文件说明
+- `auto_relogin.py`：核心运行脚本，真正必须保留的只有它。
+- `config.example.toml`：示例配置。
+- `launchd/csu.autorelogin.plist.example`：源码方式部署时的 LaunchAgent 模板。
+- `installer/macos/`：macOS 安装包构建脚本和安装后辅助脚本。
+- `capture_chrome_requests.mjs`、`parse_portal_capture.py`、`start_portal_capture.sh`：抓 portal 请求时用。
+- `live_relogin_dashboard.py`、`render_relogin_report.py`、`visual_verify_*.sh`：做可视化验证和在线演示时用。
 
 ## 安全提示
 - 配置文件含有明文密码，请设置 600 权限并避免上传版本库。
