@@ -96,7 +96,7 @@
 
 构建完成后会在 `dist/` 下生成类似：
 ```text
-dist/CSUStudentWiFi-1.0.0.pkg
+dist/CSUStudentWiFi-1.1.0.pkg
 ```
 
 安装包会放入这些最小运行时文件：
@@ -105,12 +105,25 @@ dist/CSUStudentWiFi-1.0.0.pkg
 - `/Library/Application Support/CSUStudentWiFi/setup_launch_agent.sh`
 - `/Library/Application Support/CSUStudentWiFi/disable_launch_agent.sh`
 - `/Library/Application Support/CSUStudentWiFi/open_config.sh`
+- `/Library/Application Support/CSUStudentWiFi/open_setup_wizard.sh`
 
 安装后的默认行为：
 - 自动在当前用户目录下准备 `~/Library/Application Support/CSUStudentWiFi/config.toml`
 - 自动生成 `~/Library/LaunchAgents/cn.csu.autorelogin.plist`
 - 如果检测到配置里已经不是占位账号/密码，就会自动加载 LaunchAgent
 - 如果还是示例配置，就只准备文件，不会盲目上线
+
+### 安装后的可视化设置页
+如果你已经安装好了 `.pkg`，现在可以直接开本地设置页：
+
+```bash
+"/Library/Application Support/CSUStudentWiFi/open_setup_wizard.sh"
+```
+
+它会自动打开一个本地网页，把下面这 3 步合成一个可视化流程：
+- 填账号 / 密码 / 后缀 / AC 参数
+- 保存配置并启用自动运行
+- 立即执行一次真实测试，并在页面里看结果
 
 ## 实现思路
 - 每次脚本启动先读取 `auto_relogin_state.json`；如果文件不存在，就把上次登录时间视为 Unix 纪元 `0`，从而在第一次运行时必定触发重登录。
