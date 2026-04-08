@@ -24,7 +24,7 @@ logout_user_ipv6 = ""
 logout_vlan_id = 0
 
 [client]
-check_interval_seconds = 45   # 仅 run_forever 模式使用；launchd + --once 可忽略
+check_interval_seconds = 45   # 常驻后台模式的检查间隔；值越小恢复越快，但也会更频繁探测
 force_relogin_hours = 144     # 第 6 天主动重登，避开第 7 天强制下线
 relogin_cooldown_seconds = 6  # 解绑后等待几秒再重新拉起 portal 页面并登录
 max_backoff_seconds = 300

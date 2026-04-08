@@ -2,8 +2,10 @@
 set -euo pipefail
 
 APP_SUPPORT_DIR="/Library/Application Support/CSUStudentWiFi"
+APP_BUNDLE="/Applications/CSUStudentWiFi.app"
+APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/CSUStudentWiFi"
+SETUP_BIN="$APP_SUPPORT_DIR/bin/csu-auto-relogin-setup"
 LAUNCH_AGENT_LABEL="cn.csu.autorelogin"
-START_INTERVAL_SECONDS="${START_INTERVAL_SECONDS:-18000}"
 LOAD_IF_READY=0
 
 if [[ "${1:-}" == "--load-if-ready" ]]; then
@@ -63,6 +65,12 @@ LOG_PATH="$USER_SUPPORT_DIR/auto_relogin.log"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/${LAUNCH_AGENT_LABEL}.plist"
 BIN_PATH="$APP_SUPPORT_DIR/bin/csu-auto-relogin"
 
+if [[ -x "$APP_EXECUTABLE" ]]; then
+  RUN_TARGET="$APP_EXECUTABLE"
+else
+  RUN_TARGET="$SETUP_BIN"
+fi
+
 mkdir -p "$USER_SUPPORT_DIR" "$LAUNCH_AGENTS_DIR"
 
 if [[ ! -f "$CONFIG_PATH" ]]; then
@@ -91,15 +99,13 @@ cat >"$PLIST_PATH" <<EOF
     <string>${LAUNCH_AGENT_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${BIN_PATH}</string>
-        <string>--config</string>
-        <string>${CONFIG_PATH}</string>
-        <string>--once</string>
+        <string>${RUN_TARGET}</string>
+        <string>--background</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
-    <key>StartInterval</key>
-    <integer>${START_INTERVAL_SECONDS}</integer>
+    <key>KeepAlive</key>
+    <true/>
 </dict>
 </plist>
 EOF
