@@ -104,7 +104,9 @@ cat >"$PLIST_PATH" <<EOF
 </plist>
 EOF
 
-chown -R "$TARGET_USER":staff "$USER_SUPPORT_DIR" "$LAUNCH_AGENTS_DIR"
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown -R "$TARGET_USER":staff "$USER_SUPPORT_DIR" "$LAUNCH_AGENTS_DIR"
+fi
 chmod 600 "$CONFIG_PATH" "$PLIST_PATH"
 
 if [[ "$LOAD_IF_READY" -eq 1 && config_is_ready "$CONFIG_PATH" ]]; then

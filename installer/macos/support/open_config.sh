@@ -32,7 +32,9 @@ CONFIG_PATH="$USER_SUPPORT_DIR/config.toml"
 mkdir -p "$USER_SUPPORT_DIR"
 if [[ ! -f "$CONFIG_PATH" ]]; then
   cp "$APP_SUPPORT_DIR/config.example.toml" "$CONFIG_PATH"
-  chown "$TARGET_USER":staff "$CONFIG_PATH"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chown "$TARGET_USER":staff "$CONFIG_PATH"
+  fi
   chmod 600 "$CONFIG_PATH"
 fi
 
