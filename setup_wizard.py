@@ -144,6 +144,11 @@ HTML_TEMPLATE = """<!doctype html>
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 14px;
     }}
+    .simple-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }}
     .field {{
       display: flex;
       flex-direction: column;
@@ -176,6 +181,22 @@ HTML_TEMPLATE = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
       line-height: 1.6;
+    }}
+    details {{
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(8, 13, 26, 0.55);
+      padding: 12px 14px;
+    }}
+    summary {{
+      cursor: pointer;
+      font-weight: 700;
+      color: #dbe8ff;
+      user-select: none;
+    }}
+    .advanced-body {{
+      margin-top: 14px;
     }}
     .actions {{
       display: flex;
@@ -255,7 +276,7 @@ HTML_TEMPLATE = """<!doctype html>
       .hero, .layout {{
         grid-template-columns: 1fr;
       }}
-      .grid {{
+      .grid, .simple-grid {{
         grid-template-columns: 1fr;
       }}
     }}
@@ -286,60 +307,77 @@ HTML_TEMPLATE = """<!doctype html>
     <div class="layout">
       <div class="panel">
         <h2>设置页面</h2>
-        <div class="grid">
+        <div class="simple-grid">
           <div class="field">
             <label for="username">校园网账号</label>
             <input id="username" placeholder="例如 8208231325">
           </div>
           <div class="field">
-            <label for="account_suffix">运营商后缀</label>
-            <input id="account_suffix" list="suffixes" placeholder="@cmccn">
-            <datalist id="suffixes">
-              <option value="@cmccn"></option>
-              <option value="@unicomn"></option>
-              <option value="@telecomn"></option>
-              <option value="@zndx"></option>
-            </datalist>
+            <label>默认运营商</label>
+            <input value="中国移动（默认 @cmccn）" readonly>
+            <div class="hint">默认按中国移动处理；如果以后想改联通/电信，在下方“高级选项”里再改。</div>
           </div>
           <div class="field full">
             <label for="password">校园网密码</label>
             <input id="password" type="password" placeholder="输入真实密码">
           </div>
-          <div class="field">
-            <label for="ac_ip">AC IP</label>
-            <input id="ac_ip" placeholder="抓包得到的 wlan_ac_ip">
+        </div>
+
+        <details>
+          <summary>高级选项（可选，默认不用填）</summary>
+          <div class="advanced-body">
+            <div class="grid">
+              <div class="field">
+                <label for="account_suffix">运营商后缀</label>
+                <input id="account_suffix" list="suffixes" placeholder="@cmccn">
+                <datalist id="suffixes">
+                  <option value="@cmccn"></option>
+                  <option value="@unicomn"></option>
+                  <option value="@telecomn"></option>
+                  <option value="@zndx"></option>
+                </datalist>
+              </div>
+              <div class="field">
+                <label for="required_ssid">限定 Wi-Fi 名称（可选）</label>
+                <input id="required_ssid" placeholder="留空则主要按校园网 IP 判断">
+              </div>
+              <div class="field">
+                <label for="ac_ip">AC IP（可选）</label>
+                <input id="ac_ip" placeholder="现在默认不用填">
+              </div>
+              <div class="field">
+                <label for="ac_name">AC 名称（可选）</label>
+                <input id="ac_name" placeholder="现在默认不用填">
+              </div>
+              <div class="field">
+                <label for="campus_ipv4_cidrs">校园网 IPv4 段</label>
+                <input id="campus_ipv4_cidrs" placeholder="100.64.0.0/10">
+              </div>
+              <div class="field">
+                <label for="force_relogin_hours">第几小时主动重登</label>
+                <input id="force_relogin_hours" type="number" min="1" step="1">
+              </div>
+              <div class="field">
+                <label for="relogin_cooldown_seconds">解绑后等待秒数</label>
+                <input id="relogin_cooldown_seconds" type="number" min="0" step="1">
+              </div>
+              <div class="field">
+                <label for="interface">网卡名（可选）</label>
+                <input id="interface" placeholder="例如 en0">
+              </div>
+              <div class="field full">
+                <label for="mac_override">MAC 覆盖值</label>
+                <input id="mac_override" placeholder="默认 000000000000">
+              </div>
+            </div>
           </div>
+        </details>
+
+        <div class="grid">
           <div class="field">
-            <label for="ac_name">AC 名称</label>
-            <input id="ac_name" placeholder="抓包得到的 wlan_ac_name">
-          </div>
-          <div class="field">
-            <label for="required_ssid">限定 Wi-Fi 名称（可选）</label>
-            <input id="required_ssid" placeholder="留空则主要按校园网 IP 判断">
-          </div>
-          <div class="field">
-            <label for="campus_ipv4_cidrs">校园网 IPv4 段</label>
-            <input id="campus_ipv4_cidrs" placeholder="100.64.0.0/10">
-          </div>
-          <div class="field">
-            <label for="force_relogin_hours">第几小时主动重登</label>
-            <input id="force_relogin_hours" type="number" min="1" step="1">
-          </div>
-          <div class="field">
-            <label for="relogin_cooldown_seconds">解绑后等待秒数</label>
-            <input id="relogin_cooldown_seconds" type="number" min="0" step="1">
-          </div>
-          <div class="field">
-            <label for="interface">网卡名（可选）</label>
-            <input id="interface" placeholder="例如 en0">
-          </div>
-          <div class="field">
-            <label for="mac_override">MAC 覆盖值</label>
-            <input id="mac_override" placeholder="默认 000000000000">
-          </div>
-          <div class="field full">
             <label for="notes">说明</label>
-            <textarea id="notes" readonly>首次保存后，页面不会直接联网。你需要再点“启用自动运行”或“立即测试”。
+            <textarea id="notes" readonly>现在按你的目标，默认只需要填账号和密码。
+保存后再点“启用自动运行”或“立即测试一次”即可。
 “立即测试”会执行一次真实重登录：如果当前在线，可能会有几秒瞬时断网，这是正常现象。</textarea>
           </div>
         </div>
@@ -365,6 +403,7 @@ HTML_TEMPLATE = """<!doctype html>
 
   <script>
     const setupToken = {token_json};
+    let formInitialized = false;
 
     function byId(id) {{
       return document.getElementById(id);
@@ -373,6 +412,20 @@ HTML_TEMPLATE = """<!doctype html>
     function textOrDash(value) {{
       if (value === null || value === undefined || value === "") return "未设置";
       return String(value);
+    }}
+
+    function populateForm(cfg) {{
+      byId("username").value = cfg.username || "";
+      byId("password").value = cfg.password || "";
+      byId("account_suffix").value = cfg.account_suffix || "@cmccn";
+      byId("ac_ip").value = cfg.ac_ip || "";
+      byId("ac_name").value = cfg.ac_name || "";
+      byId("required_ssid").value = cfg.required_ssid || "";
+      byId("campus_ipv4_cidrs").value = (cfg.campus_ipv4_cidrs || []).join(", ");
+      byId("force_relogin_hours").value = cfg.force_relogin_hours ?? "";
+      byId("relogin_cooldown_seconds").value = cfg.relogin_cooldown_seconds ?? "";
+      byId("interface").value = cfg.interface || "";
+      byId("mac_override").value = cfg.mac_override || "";
     }}
 
     function currentPayload() {{
@@ -405,17 +458,10 @@ HTML_TEMPLATE = """<!doctype html>
 
     function applyState(data) {{
       const cfg = data.config;
-      byId("username").value = cfg.username || "";
-      byId("password").value = cfg.password || "";
-      byId("account_suffix").value = cfg.account_suffix || "";
-      byId("ac_ip").value = cfg.ac_ip || "";
-      byId("ac_name").value = cfg.ac_name || "";
-      byId("required_ssid").value = cfg.required_ssid || "";
-      byId("campus_ipv4_cidrs").value = (cfg.campus_ipv4_cidrs || []).join(", ");
-      byId("force_relogin_hours").value = cfg.force_relogin_hours ?? "";
-      byId("relogin_cooldown_seconds").value = cfg.relogin_cooldown_seconds ?? "";
-      byId("interface").value = cfg.interface || "";
-      byId("mac_override").value = cfg.mac_override || "";
+      if (!formInitialized) {{
+        populateForm(cfg);
+        formInitialized = true;
+      }}
 
       const cards = [
         ["配置文件", data.config_path],
@@ -436,7 +482,7 @@ HTML_TEMPLATE = """<!doctype html>
       byId("page-status").textContent =
         `配置文件：${{data.config_path}}\n` +
         `自动运行：${{data.autostart_loaded ? "已加载" : "未加载"}}\n` +
-        `当前建议：${{data.config_ready ? "可以直接启用自动运行或立即测试。" : "先把账号、密码、后缀、AC IP、AC 名称填完整再保存。"}}`;
+        `当前建议：${{data.config_ready ? "可以直接启用自动运行或立即测试。" : "现在默认只需要把账号和密码填好，然后点“保存配置”。"}}`;
 
       renderTest(data.test, data.log_tail);
     }}
@@ -481,6 +527,7 @@ HTML_TEMPLATE = """<!doctype html>
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify(currentPayload()),
         }});
+        formInitialized = false;
         byId("page-status").className = "status";
         byId("page-status").textContent = data.message;
         await refresh();
@@ -585,9 +632,6 @@ def config_ready(config: dict[str, Any]) -> bool:
     required = (
         config.get("username", "").strip(),
         config.get("password", "").strip(),
-        config.get("account_suffix", "").strip(),
-        config.get("ac_ip", "").strip(),
-        config.get("ac_name", "").strip(),
     )
     if not all(required):
         return False
@@ -736,11 +780,12 @@ class SetupState:
 
     def save(self, payload: dict[str, Any]) -> dict[str, Any]:
         config = default_config()
+        account_suffix = str(payload.get("account_suffix", "")).strip() or config.get("account_suffix") or "@cmccn"
         config.update(
             {
                 "username": str(payload.get("username", "")).strip(),
                 "password": str(payload.get("password", "")),
-                "account_suffix": str(payload.get("account_suffix", "")).strip(),
+                "account_suffix": account_suffix,
                 "ac_ip": str(payload.get("ac_ip", "")).strip(),
                 "ac_name": str(payload.get("ac_name", "")).strip(),
                 "required_ssid": str(payload.get("required_ssid", "")).strip(),
@@ -761,6 +806,7 @@ class SetupState:
             "message": (
                 "配置已保存到："
                 f"\n{CONFIG_PATH}\n\n"
+                "默认中国移动后缀会自动保留。\n"
                 "下一步直接点“启用自动运行”，或者先点“立即测试一次”。"
             )
         }
