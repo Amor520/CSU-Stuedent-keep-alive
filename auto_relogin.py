@@ -38,6 +38,7 @@ DEFAULT_LOGOUT_PASSWORD = "123"
 DEFAULT_UNBIND_CALLBACK = "dr1002"
 DEFAULT_RELOGIN_COOLDOWN_SECONDS = 6
 DEFAULT_CAMPUS_IPV4_CIDRS = ("100.64.0.0/10",)
+NO_PROXY_ENV_KEYS = ("NO_PROXY", "no_proxy")
 DEFAULT_BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -127,6 +128,7 @@ class PortalAutoLogin:
         self.creds = creds
         self.net = net
         self.client = client
+        ensure_portal_no_proxy(net.portal_host)
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -396,8 +398,12 @@ class PortalAutoLogin:
 
         payload = parse_portal_response(resp.text, self.net.callback)
         msg = payload.get("msg") or payload.get("message") or payload.get("raw") or "unknown response"
-        logging.info("Portal logout response: %s", msg)
-        return True
+        success = payload.get("result") in ("1", 1, "ok") or str(payload.get("ret_code", "")) == "0"
+        if success:
+            logging.info("Portal logout success: %s", msg)
+            return True
+        logging.warning("Portal logout rejected: %s", msg)
+        return False
 
     # ------------------------------ main loops ------------------------------
     def run_once(self) -> int:
@@ -407,7 +413,9 @@ class PortalAutoLogin:
         is_online = self.is_online()
         if self.force_relogin_requested or self.need_forced_relogin():
             if is_online:
-                self.logout()
+                if not self.logout():
+                    logging.error("Unable to refresh portal session because logout/unbind failed")
+                    return EXIT_FAILURE
                 self.prepare_relogin_after_refresh()
             success = self.login()
             return EXIT_OK if success else EXIT_FAILURE
@@ -426,7 +434,7 @@ class PortalAutoLogin:
                 sleep_time = self.client.check_interval_seconds
             else:
                 sleep_time = min(self.client.max_backoff_seconds, self.client.check_interval_seconds * 2)
-            jitter = random.uniform(0, 0.25 * self.client.check_interval_seconds)
+            jitter = random.uniform(0, 0.25 * sleep_time)
             time.sleep(max(5, sleep_time + jitter))
 
     def record_successful_login(self) -> None:
@@ -439,6 +447,27 @@ class PortalAutoLogin:
 def looks_like_portal(resp: requests.Response) -> bool:
     content = resp.content[:512].lower()
     return any(hint in content for hint in CAPTIVE_HINTS)
+
+
+def ensure_portal_no_proxy(portal_host: str) -> None:
+    hosts = [portal_host.strip()]
+    if portal_host.endswith(".csu.edu.cn"):
+        hosts.append(".csu.edu.cn")
+
+    existing_tokens: list[str] = []
+    for key in NO_PROXY_ENV_KEYS:
+        existing_tokens.extend(token.strip() for token in os.environ.get(key, "").split(","))
+
+    normalized = {token.lower() for token in existing_tokens if token}
+    merged = [token for token in existing_tokens if token]
+    for host in hosts:
+        if host and host.lower() not in normalized:
+            merged.append(host)
+            normalized.add(host.lower())
+
+    value = ",".join(merged)
+    for key in NO_PROXY_ENV_KEYS:
+        os.environ[key] = value
 
 
 def detect_local_ip(interface: str = "", target: str = "223.5.5.5", port: int = 80) -> str:

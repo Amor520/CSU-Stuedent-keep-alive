@@ -366,7 +366,7 @@ HTML_TEMPLATE = """<!doctype html>
           <div class="field">
             <label>默认运营商</label>
             <input value="中国移动（默认 @cmccn）" readonly>
-            <div class="hint">默认按中国移动处理；如果以后想改联通/电信，在下方“高级选项”里再改。</div>
+            <div class="hint">当前实测按中国移动处理；其他运营商需要先抓包确认后缀。</div>
           </div>
           <div class="field full">
             <label for="password">校园网密码</label>
@@ -385,7 +385,6 @@ HTML_TEMPLATE = """<!doctype html>
                   <option value="@cmccn"></option>
                   <option value="@unicomn"></option>
                   <option value="@telecomn"></option>
-                  <option value="@zndx"></option>
                 </datalist>
               </div>
               <div class="field">
@@ -757,7 +756,7 @@ def render_config(config: dict[str, Any]) -> str:
         "logout_vlan_id = 0\n"
         "\n"
         "[client]\n"
-        "check_interval_seconds = 45\n"
+        "check_interval_seconds = 18000\n"
         f'force_relogin_hours = {int(config["force_relogin_hours"])}\n'
         f'relogin_cooldown_seconds = {int(config["relogin_cooldown_seconds"])}\n'
         "max_backoff_seconds = 300\n"

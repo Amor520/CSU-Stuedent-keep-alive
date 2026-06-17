@@ -115,8 +115,8 @@ dist/CSUStudentWiFi-1.4.3.pkg
 - 如果检测到配置里已经不是占位账号/密码，就会自动加载 LaunchAgent
 - 如果还是示例配置，就只准备文件，不会盲目上线
 
-### 安装后的原生设置程序
-如果你已经安装好了 `.pkg`，现在可以直接打开原生设置程序：
+### 安装后的菜单栏设置程序
+如果你已经安装好了 `.pkg`，现在可以直接打开菜单栏设置程序：
 
 ```bash
 open /Applications/CSUStudentWiFi.app
@@ -128,18 +128,22 @@ open /Applications/CSUStudentWiFi.app
 "/Library/Application Support/CSUStudentWiFi/open_setup_wizard.sh"
 ```
 
-它现在不再依赖浏览器，而是直接弹出一个 macOS 原生窗口，把下面这几件事压成一个最简流程：
+它现在不再依赖浏览器，而是作为 macOS 菜单栏小工具运行；首次打开会显示一个紧凑设置窗口，日常可从菜单栏图标里测试登录、开关后台自启、打开配置和日志。
+
+设置窗口把下面这几件事压成一个最简流程：
 - 只填账号 / 密码 / 运营商
 - 保存配置
 - 开启后台自启（LaunchAgent）
 - app 只负责配置和手动测试；后台仍然按原来的 5 小时巡检、6 天重登模式工作
+
+关闭设置窗口不会退出后台巡检；如需退出菜单栏图标，可从菜单中选择“退出菜单栏图标”，这不会关闭已经启用的 LaunchAgent。
 
 如果 Launchpad 没有立刻刷新，也可以直接在 Finder 里打开 `/Applications/CSUStudentWiFi.app`，或者继续使用兼容入口脚本。
 
 ## 实现思路
 - 每次脚本启动先读取 `auto_relogin_state.json`；如果文件不存在，就把上次登录时间视为 Unix 纪元 `0`，从而在第一次运行时必定触发重登录。
 - 在 macOS 上，脚本会优先判断当前 IPv4 是否落在 `client.campus_ipv4_cidrs`（默认 `100.64.0.0/10`）内；`client.required_ssid` 只作为辅助信号，避免校园网 SSID 改名后静默自启一直被跳过。
-- 安装包里的“开启后台自启”本质上是给当前用户注册一个 `LaunchAgent`。它会在你登录 macOS 后自动在后台检查，不弹出窗口，也不等同于把 `CSUStudentWiFi.app` 放进“登录时打开”应用列表。
+- 安装包里的“开启后台自启”本质上是给当前用户注册一个 `LaunchAgent`。它会在你登录 macOS 后自动在后台检查，不弹出设置窗口，也不等同于把 `CSUStudentWiFi.app` 放进“登录时打开”应用列表。
 - 当距离上次成功登录超过 `force_relogin_hours`（默认 144h）时，如果当前仍在线，脚本会优先请求 `https://portal.csu.edu.cn:802/eportal/portal/mac/unbind`，等待 `relogin_cooldown_seconds`（默认 6 秒）后预热一次 portal 页面，再调用 `https://portal.csu.edu.cn:802/eportal/portal/login` 完成重登录；如果 `mac/unbind` 失败，再回退到 `logout`。
 - 如果当前不在线，即使没到第 6 天，也会直接尝试登录，兼顾意外掉线后的恢复。
 - `wlan_user_ip` 自动从本地 UDP socket 获取；`wlan_user_mac` 现默认覆盖为 `000000000000` 以匹配 CSU 当前门户实测行为，也可自行改回真实 MAC。

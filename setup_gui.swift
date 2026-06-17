@@ -112,6 +112,36 @@ final class SetupViewModel: ObservableObject {
         autoRunText == "已经开启" && !isTesting
     }
 
+    var menuStatusText: String {
+        if isTesting {
+            return "正在执行测试"
+        }
+        if !isConfigReady {
+            return "配置未完成"
+        }
+        if autoRunText == "已经开启" {
+            return "后台自启已开启"
+        }
+        return "后台自启未开启"
+    }
+
+    var menuStatusSymbolName: String {
+        if isTesting {
+            return "arrow.triangle.2.circlepath"
+        }
+        if !isConfigReady {
+            return "wifi.exclamationmark"
+        }
+        if autoRunText == "已经开启" {
+            return "wifi"
+        }
+        return "wifi.slash"
+    }
+
+    var providerTitle: String {
+        ProviderOption.fromSuffix(config.accountSuffix).title
+    }
+
     func loadInitialState() {
         ensureUserConfig()
         loadConfig()
@@ -1132,8 +1162,13 @@ extension View {
 }
 
 struct ContentView: View {
-    @StateObject private var model = SetupViewModel()
+    @ObservedObject var model: SetupViewModel
     @State private var showPassword = false
+    @State private var showAdvanced = false
+
+    init(model: SetupViewModel) {
+        self.model = model
+    }
 
     var passwordEntryWarning: String? {
         let password = model.config.password
@@ -1160,255 +1195,275 @@ struct ContentView: View {
         model.backgroundStateText
     }
 
-    var runningBehaviorHint: String {
-        "开启后，登录 macOS 时会自动在后台检查一次，之后每 5 小时巡检，不会弹出 App 窗口。"
-    }
-
     var body: some View {
-        GeometryReader { proxy in
-            let detailWidth = proxy.size.width
-
-            ZStack {
-                backgroundArt
-
-                detailPane(width: detailWidth)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            }
+        ZStack {
+            compactBackground
+            compactPane
         }
-        .frame(minWidth: 980, minHeight: 760)
+        .frame(width: 460, height: 560)
         .onAppear {
             model.loadInitialState()
         }
         .animation(.easeInOut(duration: 0.22), value: model.isTesting)
     }
 
-    var backgroundArt: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Theme.backgroundTop, Theme.backgroundBottom],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-
-            Circle()
-                .fill(Color.white.opacity(0.75))
-                .frame(width: 460, height: 460)
-                .blur(radius: 110)
-                .offset(x: -260, y: -260)
-
-            Circle()
-                .fill(Theme.blue.opacity(0.15))
-                .frame(width: 340, height: 340)
-                .blur(radius: 84)
-                .offset(x: 430, y: -220)
-
-            Circle()
-                .fill(Theme.orange.opacity(0.12))
-                .frame(width: 420, height: 420)
-                .blur(radius: 96)
-                .offset(x: 380, y: 260)
-        }
+    var compactBackground: some View {
+        LinearGradient(
+            colors: [Theme.backgroundTop, Theme.backgroundBottom],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
         .ignoresSafeArea()
     }
 
-    func detailPane(width: CGFloat) -> some View {
-        let contentWidth = min(max(width - 72, 0), 760)
-
-        return VStack(spacing: 0) {
+    var compactPane: some View {
+        VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    headerSection(width: contentWidth)
-
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("账号登录")
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundStyle(Theme.ink)
-
-                        LazyVGrid(columns: formGridColumns(for: contentWidth), alignment: .leading, spacing: 16) {
-                            InputField(title: "校园网账号") {
-                                TextField("例如 8208231325", text: $model.config.username)
-                                    .installerInputStyle()
-                            }
-                            InputField(title: "校园网密码") {
-                                HStack(spacing: 10) {
-                                    Group {
-                                        if showPassword {
-                                            TextField("输入真实密码", text: $model.config.password)
-                                        } else {
-                                            SecureField("输入真实密码", text: $model.config.password)
-                                        }
-                                    }
-                                    .installerInputStyle()
-
-                                    Button {
-                                        showPassword.toggle()
-                                    } label: {
-                                        Image(systemName: showPassword ? "eye.slash" : "eye")
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .foregroundStyle(Theme.blue)
-                                            .frame(width: 42, height: 42)
-                                            .background(Color.white.opacity(0.94))
-                                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                    .stroke(Theme.border, lineWidth: 1)
-                                            )
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help(showPassword ? "隐藏密码" : "显示密码")
-                                }
-                            }
-                        }
-
-                        InputField(title: "运营商") {
-                            Picker("运营商", selection: providerSelection) {
-                                ForEach(ProviderOption.allCases) { provider in
-                                    Text(provider.title)
-                                        .tag(provider)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                        }
-
-                        if let passwordEntryWarning = passwordEntryWarning {
-                            ToneBanner(text: passwordEntryWarning, tone: .warn)
-                        }
-
-                        Text(runningBehaviorHint)
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.subtext)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                VStack(alignment: .leading, spacing: 18) {
+                    compactHeader
+                    statusStrip
+                    accountSection
+                    backgroundSection
+                    advancedSection
                 }
-                .padding(32)
-                .frame(maxWidth: contentWidth, alignment: .leading)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 8)
+                .padding(22)
             }
 
             Divider()
-
-            footerBar()
+            compactFooter
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    func headerSection(width: CGFloat) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 22) {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 14) {
-                        BrandMark(size: 72)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("CSU Student Wi-Fi")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(Theme.blue)
-                            Text("校园网后台登录")
-                                .font(.system(size: 30, weight: .bold))
-                                .foregroundStyle(Theme.ink)
-                        }
-                    }
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 10) {
-                            HeroBadge(icon: "power", text: backgroundStatusText)
-                            HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
-                            HeroBadge(icon: "clock", text: "每 5 小时巡检")
-                        }
-                        VStack(alignment: .leading, spacing: 10) {
-                            HeroBadge(icon: "power", text: backgroundStatusText)
-                            HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
-                            HeroBadge(icon: "clock", text: "每 5 小时巡检")
-                        }
-                    }
-                }
-                Spacer(minLength: 20)
-                Image(systemName: model.autoRunText == "已经开启" ? "power.circle.fill" : "pause.circle.fill")
-                    .font(.system(size: 40, weight: .semibold))
-                    .foregroundStyle(model.autoRunText == "已经开启" ? Theme.mint : Theme.orange)
-                    .frame(width: 78, height: 78)
-                    .background(Color.white.opacity(0.88))
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .stroke(Theme.border, lineWidth: 1)
-                    )
-                    .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 6)
+    var compactHeader: some View {
+        HStack(spacing: 12) {
+            BrandMark(size: 52)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("CSU Student Wi-Fi")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.blue)
+                Text("校园网后台登录")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(Theme.ink)
             }
+            Spacer(minLength: 0)
+            Image(systemName: model.menuStatusSymbolName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(statusAccent)
+                .frame(width: 38, height: 38)
+                .background(Color.white.opacity(0.82))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Theme.border, lineWidth: 1)
+                )
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 14) {
-                    BrandMark(size: 68)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("CSU Student Wi-Fi")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Theme.blue)
-                        Text("校园网后台登录")
-                            .font(.system(size: 30, weight: .bold))
-                            .foregroundStyle(Theme.ink)
-                    }
-                }
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) {
-                        HeroBadge(icon: "power", text: backgroundStatusText)
-                        HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        HeroBadge(icon: "power", text: backgroundStatusText)
-                        HeroBadge(icon: "at", text: providerSelection.wrappedValue.title)
-                    }
-                }
-                Text(runningBehaviorHint)
-                    .font(.system(size: 13))
+    var statusAccent: Color {
+        switch model.pageStatusTone {
+        case .good:
+            return Theme.mint
+        case .warn:
+            return Theme.orange
+        case .bad:
+            return Theme.rose
+        case .normal:
+            return Theme.blue
+        }
+    }
+
+    var statusStrip: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(statusAccent)
+                .frame(width: 8, height: 8)
+                .padding(.top, 6)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.menuStatusText)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(model.pageStatus)
+                    .font(.system(size: 12))
                     .foregroundStyle(Theme.subtext)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(3)
             }
+            Spacer(minLength: 0)
         }
+        .padding(12)
+        .background(Color.white.opacity(0.72))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
     }
 
-    func footerBar() -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 14) {
-                footerSummary
-                Spacer(minLength: 20)
-                footerButtons
+    var accountSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitle("账号配置")
+            InputField(title: "校园网账号") {
+                TextField("例如 8208231325", text: $model.config.username)
+                    .installerInputStyle()
             }
+            InputField(title: "校园网密码") {
+                HStack(spacing: 8) {
+                    Group {
+                        if showPassword {
+                            TextField("输入真实密码", text: $model.config.password)
+                        } else {
+                            SecureField("输入真实密码", text: $model.config.password)
+                        }
+                    }
+                    .installerInputStyle()
 
-            VStack(alignment: .leading, spacing: 14) {
-                footerSummary
-                footerButtons
-            }
-        }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 18)
-    }
-
-    var footerSummary: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(model.pageStatus)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(3)
-        }
-    }
-
-    var footerButtons: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                saveButton
-                enableButton
-                disableButton
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                saveButton
-                HStack(spacing: 10) {
-                    enableButton
-                    disableButton
+                    Button {
+                        showPassword.toggle()
+                    } label: {
+                        Image(systemName: showPassword ? "eye.slash" : "eye")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.blue)
+                            .frame(width: 40, height: 40)
+                            .background(Color.white.opacity(0.94))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Theme.border, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help(showPassword ? "隐藏密码" : "显示密码")
                 }
             }
+            InputField(title: "运营商") {
+                Picker("运营商", selection: providerSelection) {
+                    ForEach(ProviderOption.allCases) { provider in
+                        Text(provider.title)
+                            .tag(provider)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+            Text("当前实测中国移动；联通/电信仅保留后缀切换入口。")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.subtext)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let passwordEntryWarning = passwordEntryWarning {
+                ToneBanner(text: passwordEntryWarning, tone: .warn)
+            }
         }
+        .padding(16)
+        .background(Theme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+    }
+
+    var backgroundSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitle("后台运行")
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: model.autoRunText == "已经开启" ? "checkmark.circle.fill" : "pause.circle.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(model.autoRunText == "已经开启" ? Theme.mint : Theme.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(backgroundStatusText)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.ink)
+                    Text("登录 macOS 后检查一次，之后每 5 小时巡检。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.subtext)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(16)
+        .background(Theme.panel)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+    }
+
+    var advancedSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                showAdvanced.toggle()
+            } label: {
+                HStack {
+                    Label("高级与日志", systemImage: "slider.horizontal.3")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Image(systemName: showAdvanced ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .foregroundStyle(Theme.ink)
+            }
+            .buttonStyle(.plain)
+
+            if showAdvanced {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Button("打开配置") {
+                            model.openConfigFile()
+                        }
+                        Button("打开日志") {
+                            model.openLogFile()
+                        }
+                        Button("显示文件夹") {
+                            model.revealSupportFolder()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    PathRow(title: "配置文件", value: model.configPathText)
+                    PathRow(title: "日志文件", value: model.logPathText)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.66))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+    }
+
+    var compactFooter: some View {
+        HStack(spacing: 10) {
+            Button {
+                model.runImmediateTest()
+            } label: {
+                Label(model.isTesting ? "测试中" : "立即测试", systemImage: "bolt.circle")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .disabled(!model.canRunImmediateTest)
+
+            Spacer(minLength: 0)
+
+            saveButton
+            if model.canDisableAutostart {
+                disableButton
+            } else {
+                enableButton
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+    }
+
+    private func SectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(Theme.ink)
     }
 
     var saveButton: some View {
@@ -1445,20 +1500,192 @@ struct ContentView: View {
         .disabled(!model.canDisableAutostart)
     }
 
-    func formGridColumns(for width: CGFloat) -> [GridItem] {
-        if width > 820 {
-            return Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top), count: 2)
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    let model = SetupViewModel()
+    private var statusItem: NSStatusItem?
+    private var settingsWindow: NSWindow?
+    private var refreshTimer: Timer?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        model.loadInitialState()
+        installStatusItem()
+        showSettingsWindow()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.model.refreshRuntimeState()
+                self?.refreshStatusItem()
+            }
         }
-        return [GridItem(.flexible(), spacing: 16, alignment: .top)]
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        refreshTimer?.invalidate()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+
+    private func installStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = statusItem?.button {
+            button.image = NSImage(systemSymbolName: model.menuStatusSymbolName, accessibilityDescription: "CSU Student Wi-Fi")
+            button.image?.isTemplate = true
+            button.toolTip = model.menuStatusText
+        }
+        refreshStatusItem()
+    }
+
+    private func refreshStatusItem() {
+        model.refreshRuntimeState()
+        if let button = statusItem?.button {
+            button.image = NSImage(systemSymbolName: model.menuStatusSymbolName, accessibilityDescription: "CSU Student Wi-Fi")
+            button.image?.isTemplate = true
+            button.toolTip = model.menuStatusText
+        }
+        statusItem?.menu = buildStatusMenu()
+    }
+
+    private func buildStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        let titleItem = NSMenuItem(title: "CSU Student Wi-Fi", action: nil, keyEquivalent: "")
+        titleItem.isEnabled = false
+        menu.addItem(titleItem)
+
+        let statusItem = NSMenuItem(title: model.menuStatusText, action: nil, keyEquivalent: "")
+        statusItem.image = NSImage(systemSymbolName: model.menuStatusSymbolName, accessibilityDescription: nil)
+        statusItem.isEnabled = false
+        menu.addItem(statusItem)
+
+        let providerItem = NSMenuItem(title: "运营商：\(model.providerTitle)", action: nil, keyEquivalent: "")
+        providerItem.isEnabled = false
+        menu.addItem(providerItem)
+
+        if model.isTesting {
+            let testingItem = NSMenuItem(title: model.testStatus, action: nil, keyEquivalent: "")
+            testingItem.isEnabled = false
+            menu.addItem(testingItem)
+        }
+
+        menu.addItem(.separator())
+        addItem("立即测试登录", image: "bolt.circle", action: #selector(runImmediateTest), to: menu, enabled: model.canRunImmediateTest)
+
+        if model.canDisableAutostart {
+            addItem("关闭后台自启", image: "power.circle", action: #selector(disableAutostart), to: menu, enabled: !model.isTesting)
+        } else {
+            addItem("开启后台自启", image: "play.fill", action: #selector(enableAutostart), to: menu, enabled: model.canEnableAutostart)
+        }
+
+        menu.addItem(.separator())
+        addItem("打开设置...", image: "gearshape", action: #selector(openSettings), to: menu)
+        addItem("打开配置文件", image: "doc.text", action: #selector(openConfig), to: menu)
+        addItem("打开日志", image: "text.page", action: #selector(openLog), to: menu)
+        addItem("显示配置文件夹", image: "folder", action: #selector(revealSupportFolder), to: menu)
+
+        menu.addItem(.separator())
+        addItem("退出菜单栏图标", image: "xmark.circle", action: #selector(quit), to: menu)
+
+        return menu
+    }
+
+    private func addItem(
+        _ title: String,
+        image: String,
+        action: Selector,
+        to menu: NSMenu,
+        enabled: Bool = true
+    ) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = enabled
+        item.image = NSImage(systemSymbolName: image, accessibilityDescription: nil)
+        menu.addItem(item)
+    }
+
+    @objc private func openSettings() {
+        showSettingsWindow()
+    }
+
+    @objc private func runImmediateTest() {
+        model.runImmediateTest()
+        refreshStatusItem()
+        scheduleStatusRefresh()
+    }
+
+    @objc private func enableAutostart() {
+        model.saveConfig()
+        model.enableAutostart()
+        refreshStatusItem()
+        scheduleStatusRefresh()
+    }
+
+    @objc private func disableAutostart() {
+        model.disableAutostart()
+        refreshStatusItem()
+        scheduleStatusRefresh()
+    }
+
+    @objc private func openConfig() {
+        model.openConfigFile()
+    }
+
+    @objc private func openLog() {
+        model.openLogFile()
+    }
+
+    @objc private func revealSupportFolder() {
+        model.revealSupportFolder()
+    }
+
+    @objc private func quit() {
+        NSApp.terminate(nil)
+    }
+
+    private func showSettingsWindow() {
+        if settingsWindow == nil {
+            let rootView = ContentView(model: model)
+            let hostingController = NSHostingController(rootView: rootView)
+            let window = NSWindow(contentViewController: hostingController)
+            window.title = "CSU Student Wi-Fi"
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+            window.setContentSize(NSSize(width: 460, height: 560))
+            window.minSize = NSSize(width: 440, height: 520)
+            settingsWindow = window
+        }
+
+        model.refreshRuntimeState()
+        refreshStatusItem()
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.center()
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func scheduleStatusRefresh(after delay: TimeInterval = 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.model.refreshRuntimeState()
+            self?.refreshStatusItem()
+        }
     }
 }
 
 @main
 struct CSUAutoReloginSetupApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
-        WindowGroup("CSU Student Wi-Fi") {
-            ContentView()
+        Settings {
+            EmptyView()
         }
-        .windowResizability(.automatic)
     }
 }

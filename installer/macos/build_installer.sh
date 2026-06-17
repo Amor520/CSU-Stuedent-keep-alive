@@ -9,6 +9,7 @@ VERSION="${VERSION:-1.4.6}"
 PKG_ID="cn.csu.autorelogin"
 APP_SUPPORT_SUBDIR="CSUStudentWiFi"
 PKGROOT="$BUILD_DIR/pkgroot"
+PKGSCRIPTS_DIR="$BUILD_DIR/pkgscripts"
 PAYLOAD_BASE="$PKGROOT/Library/Application Support/$APP_SUPPORT_SUBDIR"
 DIST_DIR="$ROOT_DIR/dist"
 BIN_NAME="csu-auto-relogin"
@@ -23,6 +24,7 @@ echo "[1/6] Preparing build directories"
 rm -rf "$BUILD_DIR"
 mkdir -p \
   "$BUILD_DIR" \
+  "$PKGSCRIPTS_DIR" \
   "$DIST_DIR" \
   "$PAYLOAD_BASE/bin" \
   "$ICON_DIR"
@@ -79,12 +81,15 @@ chmod 755 \
   "$PAYLOAD_BASE/open_setup_wizard.sh"
 
 echo "[5/6] Building pkg"
+sed "s/CSU_STUDENT_WIFI_VERSION:-[^}]*/CSU_STUDENT_WIFI_VERSION:-$VERSION/" \
+  "$ROOT_DIR/installer/macos/pkgscripts/postinstall" > "$PKGSCRIPTS_DIR/postinstall"
+chmod 755 "$PKGSCRIPTS_DIR/postinstall"
 pkgbuild \
   --root "$PKGROOT" \
   --identifier "$PKG_ID" \
   --version "$VERSION" \
   --install-location "/" \
-  --scripts "$ROOT_DIR/installer/macos/pkgscripts" \
+  --scripts "$PKGSCRIPTS_DIR" \
   "$DIST_DIR/$PKG_NAME" >/dev/null
 
 echo "[6/6] Done"

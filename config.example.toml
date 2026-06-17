@@ -1,7 +1,7 @@
 [credentials]
 username = "20211234567"
 password = "replace-with-real-password"
-account_suffix = "@cmccn"  # 例如 @cmccn/@unicomn/@telecomn 或 @zndx
+account_suffix = "@cmccn"  # 当前实测中国移动 @cmccn；其他运营商请先抓包确认后缀
 
 [network]
 portal_host = "portal.csu.edu.cn"
