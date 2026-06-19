@@ -472,7 +472,11 @@ def ensure_portal_no_proxy(portal_host: str) -> None:
 
 def detect_local_ip(interface: str = "", target: str = "223.5.5.5", port: int = 80) -> str:
     if interface:
-        ip_address = read_ipv4_from_ifconfig(interface)
+        ip_address = (
+            read_ipv4_from_windows_interface(interface)
+            if sys.platform.startswith("win")
+            else read_ipv4_from_ifconfig(interface)
+        )
         if ip_address:
             return ip_address
 
@@ -504,7 +508,11 @@ def detect_local_ip_safely(interface: str = "") -> str:
 
 def detect_mac(interface: str = "") -> str:
     if interface:
-        mac = read_mac_from_ifconfig(interface)
+        mac = (
+            read_mac_from_windows_interface(interface)
+            if sys.platform.startswith("win")
+            else read_mac_from_ifconfig(interface)
+        )
         if mac:
             return mac
     if sys.platform == "darwin":
@@ -566,6 +574,75 @@ def read_ipv4_from_ifconfig(interface: str) -> str:
     return ""
 
 
+def read_windows_ipconfig_all() -> str:
+    import subprocess
+
+    try:
+        return subprocess.check_output(["ipconfig", "/all"], text=True, stderr=subprocess.STDOUT)
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def iter_windows_ipconfig_blocks() -> list[tuple[str, list[str]]]:
+    output = read_windows_ipconfig_all()
+    blocks: list[tuple[str, list[str]]] = []
+    current_name = ""
+    current_lines: list[str] = []
+    for raw_line in output.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        if not raw_line.startswith((" ", "\t")) and line.endswith(":"):
+            if current_name or current_lines:
+                blocks.append((current_name, current_lines))
+            current_name = line[:-1].strip()
+            current_lines = []
+            continue
+        current_lines.append(line)
+    if current_name or current_lines:
+        blocks.append((current_name, current_lines))
+    return blocks
+
+
+def windows_interface_matches(block_name: str, requested: str) -> bool:
+    if not requested:
+        return True
+    wanted = requested.casefold()
+    return wanted in block_name.casefold()
+
+
+def read_ipv4_from_windows_interface(interface: str = "") -> str:
+    for block_name, lines in iter_windows_ipconfig_blocks():
+        if not windows_interface_matches(block_name, interface):
+            continue
+        for line in lines:
+            if "IPv4" not in line or ":" not in line:
+                continue
+            value = line.split(":", 1)[1].strip()
+            match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", value)
+            if not match:
+                continue
+            ip_address = match.group(0)
+            if not ip_address.startswith("169.254."):
+                return ip_address
+    return ""
+
+
+def read_mac_from_windows_interface(interface: str = "") -> str:
+    for block_name, lines in iter_windows_ipconfig_blocks():
+        if not windows_interface_matches(block_name, interface):
+            continue
+        for line in lines:
+            normalized = line.casefold()
+            if ("physical" not in normalized and "物理" not in line) or ":" not in line:
+                continue
+            value = line.split(":", 1)[1].strip()
+            match = re.search(r"\b[0-9A-Fa-f]{2}(?:[-:][0-9A-Fa-f]{2}){5}\b", value)
+            if match:
+                return match.group(0).replace("-", "").replace(":", "").lower()
+    return ""
+
+
 def ipv4_to_portal_int(ip: str) -> str:
     parts = ip.strip().split(".")
     if len(parts) != 4:
@@ -602,6 +679,9 @@ def ip_matches_any_cidr(ip: str, cidrs: list[str]) -> bool:
 
 
 def get_current_wifi_ssid(interface: str = "") -> str:
+    if sys.platform.startswith("win"):
+        return read_ssid_from_netsh(interface)
+
     if sys.platform != "darwin":
         return ""
 
@@ -722,6 +802,37 @@ def read_ssid_from_airport() -> str:
             line = raw_line.strip()
             if line.startswith("SSID: "):
                 return line.split(": ", 1)[1].strip()
+    return ""
+
+
+def read_ssid_from_netsh(interface: str = "") -> str:
+    import subprocess
+
+    commands = [
+        ["netsh", "wlan", "show", "interfaces"],
+    ]
+    for cmd in commands:
+        try:
+            output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+
+        current_interface = ""
+        current_ssid = ""
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if ":" not in line:
+                continue
+            key, value = [part.strip() for part in line.split(":", 1)]
+            key_folded = key.casefold()
+            if key_folded == "name" or key in ("名称", "接口名称"):
+                current_interface = value
+                current_ssid = ""
+                continue
+            if key_folded == "ssid" and "bssid" not in key_folded:
+                current_ssid = value
+                if not interface or current_interface.casefold() == interface.casefold():
+                    return current_ssid
     return ""
 
 

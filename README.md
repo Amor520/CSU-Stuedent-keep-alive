@@ -140,10 +140,49 @@ open /Applications/CSUStudentWiFi.app
 
 如果 Launchpad 没有立刻刷新，也可以直接在 Finder 里打开 `/Applications/CSUStudentWiFi.app`，或者继续使用兼容入口脚本。
 
+### Windows 首版构建与安装
+Windows 版当前按“最小可用后台版”设计：复用同一个 `auto_relogin.py` 核心逻辑，用 PyInstaller 打成 `.exe`，再通过当前用户的“任务计划程序”实现登录时检查一次、之后每 5 小时巡检一次。
+
+需要在 Windows 机器上构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\installer\windows\build_windows.ps1
+```
+
+构建完成后会生成：
+
+```text
+dist\windows\CSUStudentWiFi-1.4.6\
+dist\CSUStudentWiFi-1.4.6-windows.zip
+```
+
+在 Windows 上解压后进入目录，执行用户级安装：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install_user.ps1
+```
+
+安装后的默认位置：
+- 程序文件：`%LOCALAPPDATA%\CSUStudentWiFi\csu-auto-relogin.exe`
+- 用户配置：`%APPDATA%\CSUStudentWiFi\config.toml`
+- 自动任务：`CSUStudentWiFi Auto Re-login`
+
+编辑好 `%APPDATA%\CSUStudentWiFi\config.toml` 后，可以先手动测试一次：
+
+```powershell
+& "$env:LOCALAPPDATA\CSUStudentWiFi\csu-auto-relogin.exe" --config "$env:APPDATA\CSUStudentWiFi\config.toml" --once --force-relogin --verbose
+```
+
+卸载自动任务和程序文件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CSUStudentWiFi\uninstall_user.ps1"
+```
+
 ## 实现思路
 - 每次脚本启动先读取 `auto_relogin_state.json`；如果文件不存在，就把上次登录时间视为 Unix 纪元 `0`，从而在第一次运行时必定触发重登录。
-- 在 macOS 上，脚本会优先判断当前 IPv4 是否落在 `client.campus_ipv4_cidrs`（默认 `100.64.0.0/10`）内；`client.required_ssid` 只作为辅助信号，避免校园网 SSID 改名后静默自启一直被跳过。
-- 安装包里的“开启后台自启”本质上是给当前用户注册一个 `LaunchAgent`。它会在你登录 macOS 后自动在后台检查，不弹出设置窗口，也不等同于把 `CSUStudentWiFi.app` 放进“登录时打开”应用列表。
+- 在 macOS/Windows 上，脚本会优先判断当前 IPv4 是否落在 `client.campus_ipv4_cidrs`（默认 `100.64.0.0/10`）内；`client.required_ssid` 只作为辅助信号，避免校园网 SSID 改名后静默自启一直被跳过。
+- macOS 安装包里的“开启后台自启”本质上是给当前用户注册一个 `LaunchAgent`；Windows 首版脚本则注册当前用户的 Scheduled Task。它们都会在你登录系统后自动在后台检查，不弹出设置窗口。
 - 当距离上次成功登录超过 `force_relogin_hours`（默认 144h）时，如果当前仍在线，脚本会优先请求 `https://portal.csu.edu.cn:802/eportal/portal/mac/unbind`，等待 `relogin_cooldown_seconds`（默认 6 秒）后预热一次 portal 页面，再调用 `https://portal.csu.edu.cn:802/eportal/portal/login` 完成重登录；如果 `mac/unbind` 失败，再回退到 `logout`。
 - 如果当前不在线，即使没到第 6 天，也会直接尝试登录，兼顾意外掉线后的恢复。
 - `wlan_user_ip` 自动从本地 UDP socket 获取；`wlan_user_mac` 现默认覆盖为 `000000000000` 以匹配 CSU 当前门户实测行为，也可自行改回真实 MAC。
@@ -160,6 +199,7 @@ open /Applications/CSUStudentWiFi.app
 - `config.example.toml`：示例配置。
 - `launchd/csu.autorelogin.plist.example`：源码方式部署时的 LaunchAgent 模板。
 - `installer/macos/`：macOS 安装包构建脚本和安装后辅助脚本。
+- `installer/windows/`：Windows PyInstaller 构建、用户级安装和任务计划程序脚本。
 - `capture_chrome_requests.mjs`、`parse_portal_capture.py`、`start_portal_capture.sh`：抓 portal 请求时用。
 - `live_relogin_dashboard.py`、`render_relogin_report.py`、`visual_verify_*.sh`：做可视化验证和在线演示时用。
 
